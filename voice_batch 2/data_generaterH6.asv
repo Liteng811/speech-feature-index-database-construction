@@ -1,0 +1,2246 @@
+function  [audio,audio_t,audio_dat]=data_generaterH6(speech,audio,fs_ori,Ts,FBEs,markFBEtimeline,MAG,quitHz )
+    %%%%Ts 为frame shift (ms)，一般是10ms
+    %%%%读取五音文件20200306新加%%%%
+    %audio_t.title=1;
+    %audio_dat.title='标题';
+    fivetonedata='five_tone_data.xlsx';
+    [data,~,~]=xlsread(fivetonedata);
+    fivetonemel20=data(:, 10:29);   %五音原始mel频谱20分量
+    fivetonerank5=data(:, 1:3);
+
+    max_five20=max(fivetonemel20,[],2);  %行向量最大值
+    min_five20=min(fivetonemel20,[],2);  %行向量最小值
+    M=size(fivetonemel20,2);  %m=20
+    maxrank=repmat(max_five20,1,M);  
+    minrank=repmat(min_five20,1,M);
+    max_five20=(fivetonemel20-minrank)./(maxrank-minrank);    
+    %%%%读取五音文件结束%%%%
+    %%%%mfcc分析%%%%
+    [mfcc_M,line]=size(FBEs); %M 3102,求一共有多少纵列 
+    %size(markFBEtimeline)
+  % i=3:row;  j=1:line;
+    crosszeroline=zeros(1,line);  %语音信号的过零率行列    
+    %%%%前期计算分析语音的能量曲线，过零率，短时能量分布基础性信息%%%%
+    %framepointnum=floor(length(speech)/line);
+    framepointnum=floor(fs_ori*Ts/1000);
+    %size(FBEs,2)*framepointnum
+    %numel(speech)
+    %if size(FBEs,2)*framepointnum>numel(speech)        
+    %end    
+    speech_FBEs_energy_frameline=zeros(1,line);  %音频段能量线
+    speechenergyrank=zeros(framepointnum,line);
+    for j=1:line
+        %speechenergyrank(j)= sum(speech(framepointnum*(j-1)+1:framepointnum(j)).*speech(framepointnum*(j-1)+1:framepointnum(j)));
+        for k=1:framepointnum-1
+           speechenergyrank(:,j)= speech(framepointnum*(j-1)+k)*speech(framepointnum*(j-1)+k);%声音能量矩阵           
+            if speech(framepointnum*(j-1)+k)*speech(framepointnum*(j-1)+k+1)<0                
+                crosszeroline(j)=crosszeroline(j)+1;
+            end
+        end
+        speech_FBEs_energy_frameline(j)=sum(speechenergyrank(:,j));%声音能量线性，即时序声压
+        %speech_intense_frameline(j)= speech_energy_frameline/2*(j);%声音强度，声强
+    end
+    %%%%前期计算分析语音的能量曲线，过零率，短时能量分布基础性信息完成%%%%    
+    %%%%第一步，识别语音以及噪音,beep音，通过已有的方法，并设计marktimeline完成标注%%%%
+    %{
+    opts=1;
+    vadThres=0.8;
+    [markFBEtimeline]=vad(speech,fs_ori,opts,vadThres);  %opts模式选择，vadthres，严苛度，0-1越高越严
+    markFBEtimeline=reshape(markFBEtimeline,[],1); %纵列矩阵
+    %}
+    %voicestart_stoppoints=find(diff(markFBEtimeline)~=0);
+    %speech_energy_frameline';
+    %crosszeroline';    
+    size(speech_FBEs_energy_frameline);%横向矩阵
+    %%%%vad运算，识别语音区间
+    %beep音的第一个特征，在七行最大值,利用这个特征定位beep%%%%
+    %{
+    j=1:line;
+    [~,location]=max(FBEs(:,j),[],1);
+    location(location~=7)=0;
+    mark=diff(location);
+    mark1location=find(mark==7);
+    mark_1location=find(mark==-7);
+    numel(location==7);
+    beepstart=1;
+    beepend=1;
+    %if or(isempty(mark_1location),isempty(mark1location))
+    if numel(location==7)==0 
+        beepstart=1;
+        beepend=1;
+    elseif numel(mark_1location)>=1
+        beepend=mark_1location(1);
+        if numel(mark1location)==0
+            mark1location=1;
+        else
+            beepstart=mark1location(1);
+        end
+        if mark_1location(1)<mark1location(1)
+            mark1location=[1,mark1location];        
+        end
+        if length(mark_1location)~=length(mark1location)
+            length1=min(length(mark_1location),length(mark1location));
+            mark_1location=mark_1location(1:length1);
+            mark1location=mark1location(1:length1);
+        end    
+        [~,lll]=max(mark_1location-mark1location);
+        if mark_1location(lll)>(find(markFBEtimeline==1,1)+numel(find(markFBEtimeline==1))/2)            
+            beepstart=1;
+            beepend=find(markFBEtimeline==1,1)+numel(find(markFBEtimeline==1))/2;
+        else
+        %lll=find(max(mark_1location-mark1location));
+            beepstart=mark1location(lll);
+            beepend=mark_1location(lll);                       
+        end
+    end
+    %}
+    beepstart=1;
+    beepend=1;
+    %%%%beep寻找完成%%%%
+    markFBEtimeline(beepstart:beepend)=0;%2;
+    markFBEtimeline(1:beepstart)=0;  %-1
+    %floor(fs_ori*Ts/1000);
+	%size(markFBEtimeline);
+    %%%%第一步，完成识别语音以及噪音,beep音以及beep前音的标注，并设计markFBEtimeline完成标注%%%% 
+    %%%%标注markspeechtimeline扩张成speech长度格式%%%%
+    markspeechtimeline=repmat(markFBEtimeline',floor(fs_ori*Ts/1000),1);
+    markspeechtimeline=reshape(markspeechtimeline,[],1);%变成一列数据标注speech。
+    if length(markspeechtimeline)>length(speech)
+        markspeechtimeline=markspeechtimeline(1:length(speech));
+    elseif length(markspeechtimeline)<length(speech)
+        speech=speech(1:length(markspeechtimeline));
+    end
+    %%%%过零率分布%%%%
+    voice_cross_zero_nummean=mean(crosszeroline(markFBEtimeline==1));
+    voice_cross_zero_numstd=std(crosszeroline(markFBEtimeline==1));
+    noise_cross_zero_nummean=mean(crosszeroline(markFBEtimeline==0));
+    noise_cross_zero_numstd=std(crosszeroline(markFBEtimeline==0));
+    audio.voice_cross_zero_nummean=voice_cross_zero_nummean;
+    audio.voice_cross_zero_numstd=voice_cross_zero_numstd;
+    audio.noise_cross_zero_nummean=noise_cross_zero_nummean;
+    audio.noise_cross_zero_numstd=noise_cross_zero_numstd;
+    %%%%过零率分布完成%%%%    
+    %%%%%%%平滑%%%
+    p=ones(1,10)*(1/10);
+    speech_FBEs_energy_frameline=filter(p,1,speech_FBEs_energy_frameline);%第一步，平滑完成；
+    %%%%剩下的0就是噪音段%%%%
+    %{
+    %%%%标注markspeechtimeline扩张成speech长度格式%%%%
+    markspeechtimeline=repmat(markFBEtimeline,fs*0.01,1);
+    markspeechtimeline=reshape(markspeechtimeline,[],1);%变成一列数据标注speech。
+    if length(markspeechtimeline)>length(speech)
+        markspeechtimeline=markspeechtimeline(1:length(speech));
+    elseif length(markspeechtimeline)<length(speech)
+        speech=speech(1:length(markspeechtimeline));
+    end                  
+    %%%%扩张成speech标注格式完成，可以直接加减%%%%   上面已经有了 
+    %}    
+    noisetimeratio=length(find(markFBEtimeline==0))/length(markFBEtimeline);
+    voicetimeratio=length(find(markFBEtimeline==1))/length(markFBEtimeline);
+    beeptimeratio=length(find(markFBEtimeline==2))/length(markFBEtimeline);
+
+    noisevolume_average=mean(abs(speech_FBEs_energy_frameline(markFBEtimeline==0)));%/(noisetimeratio*length(speech)/fs); %平均噪音能量
+    voicevolume_average=mean(abs(speech_FBEs_energy_frameline(markFBEtimeline==1)));%/(noisetimeratio*length(speech)/fs); %平均语音能量
+    voicevolume_std=std(abs(speech_FBEs_energy_frameline(markFBEtimeline==1))); %平均语音能量标准差
+    voicevolume_trending=polyfit(1:numel(find(markFBEtimeline==1)),abs(speech_FBEs_energy_frameline(markFBEtimeline==1)),1);%平均语音能量变化趋势
+    voicepressure=sqrt(voicevolume_average/(fs_ori*(Ts/1000)));
+    voicepressure_level=20*log10((voicepressure)/(1*2*10e-5));%平均声压级，单位dB 100
+    voiceintensity_average=(voicepressure*voicepressure)/(2*1.29*346);%平均声强，单位J,或N/m，或W/s.*1000/Ts     (2*1.29*346)
+    voiceintensity_level=10*log10((voiceintensity_average)/(1*10e-12)); %平均声强级,单位dB 0000
+    %音强
+    
+    if numel(markFBEtimeline==2)>1
+        beepvolume_average=mean(abs(speech_FBEs_energy_frameline(markFBEtimeline==2))); %平均beep能量，计算完成以后，就不需要这个音了
+    else
+        beepvolume_average=0;
+    end
+    v_nvolumeratio=voicevolume_average/noisevolume_average;%信噪比
+    v_beepvolumeratio=voicevolume_average/beepvolume_average; %语音beep音的音量比
+    
+    speech(markspeechtimeline==2)=0;  %抹去了beep音
+    speech(markspeechtimeline==-1)=0;%抹去了beep音前面的系统噪音
+    speech_FBEs_energy_frameline(markFBEtimeline==2)=0;
+    speech_FBEs_energy_frameline(markFBEtimeline==-1)=0;
+    %%%%speech
+    %%%%由此改变，去掉beep音，变成纯语音+噪音%%%%,同步speech_energy_frameline能量曲线也去掉了beep音以及之前。
+    audio.noisetimeratio=noisetimeratio;
+    audio.voicetimeratio=voicetimeratio;
+    audio.beeptimeratio=beeptimeratio;
+    
+    audio.noisevolume_average=noisevolume_average;
+    audio.voicevolume_average=voicevolume_average;
+    audio.voicevolume_std=voicevolume_std;    
+    audio.voicepressure_level=voicepressure_level;%声压级（dB）
+    audio.voiceintensity_average=voiceintensity_average;%声强（J)
+    audio.voiceintensity_level=voiceintensity_level;%声强级（dB）
+    audio.voicevolume_trending=voicevolume_trending(1);
+    
+    audio.beepvolume_average=beepvolume_average;
+    audio.v_nvolumeratio=v_nvolumeratio;
+    audio.voice_beepratio=v_beepvolumeratio;
+    %%%%FBEs特征输出也完成%%%%
+    
+    %%%%独立1.重点开始以次声波频率特征为关键点，开展下方实验，求取次声频段能量以及共振峰%%%%
+    %%%%全音、噪音、语音的fft变换%%%%
+    L=length(speech);
+    timespan=L/fs_ori;
+    audio.time=timespan;%音频时长
+    audio.voicetime=voicetimeratio*timespan;%识别语音部分时长
+    NFFT = 2^nextpow2(L);
+    Yfft= fft(speech((find(markspeechtimeline==1|markspeechtimeline==0))),NFFT)/L;        
+    Yfft=reshape(Yfft,[],1); %变成一列数据 整体的傅里叶变换
+    Ynoisefft= fft(speech((find(markspeechtimeline==0))),NFFT)/L;        
+    Ynoisefft=reshape(Ynoisefft,[],1); %变成一列数据  噪音的傅里叶变换  
+    %对整体语音段信号完成fft变换，并减去噪音fft    
+    Yvoicefft = fft(speech((find(markspeechtimeline==1))),NFFT)/L;    
+    Yvoicefft=reshape(Yvoicefft,[],1); %变成一列数据  语音的傅里叶变换
+    if isempty(find(markspeechtimeline==1, 1))
+       Yvoicefft=Ynoisefft; %如果没有检测到语音，就用全部的噪音替代
+    end
+    %%%%%%%%全音、噪音、语音的fft变换完成%%%%%%%%貌似需要考虑到相位的问题，不能够如下直接相减。
+    %%%%%%%%共振峰计算开始5个%%%%%%%%
+    Sfs=L/timespan;   %针对分析数据的时间序列能量频率
+    f = Sfs/2*linspace(0,1,NFFT/2+1);   %傅里叶变换后的频率分量
+    dotnum=numel(find(f<=fs_ori/2));  %表明频率在0-8000范围内的采样点fs=48000时，dotnum=21846 有时是43691
+    max(f);
+    %NFFT==65536
+    length(f);  %length(f)==32769（fs=16000）length(f)==65537（fs=48000）个数值,最大频率24000Hz,计划分成256份每份128个f,频率跨度30Hz  8193
+    max(f);   %7946.7Hz  7714.43
+    %%%插入-按照梅尔频率分割方法，计算20个频段峰值累加quitHz为截止频率%%%20190609加上mel频谱幅值累加
+    fstoppoint=floor(((NFFT/2+1)/max(f))*quitHz);%在speech的fft上找20个mel点位(max(f)/max(quitHz))*
+    if fstoppoint(1)==0
+        fstoppoint=[1 fstoppoint(2:end)]; 
+    else
+        fstoppoint=[1 fstoppoint(1:end)]; 
+    end
+    Yabsvoicefft=abs(Yvoicefft(1:NFFT/2+1));
+    speech_fft_energy_sec_in_20mel=zeros(1,length(fstoppoint)-1);
+    for i=1:length(fstoppoint)-1
+        speech_fft_energy_sec_in_20mel(i)=sum(Yabsvoicefft(fstoppoint(i):fstoppoint(i+1)));
+    end
+    audio.melenergy_20sec_sum=speech_fft_energy_sec_in_20mel;%mel20幅值。按照mel频谱分段20段得到的频谱幅度直接累加
+    [peaks_value_in_speech_fft_20melsec,peaks_location_in_speech_fft_20melsec]=findpeaks(speech_fft_energy_sec_in_20mel);
+    [peaks_value_in_speech_fft_20melsec,peaks_location_in_speech_fft_20melsec]=findpeaksreverse(peaks_value_in_speech_fft_20melsec,peaks_location_in_speech_fft_20melsec);
+    [valley_value_in_speech_fft_20melsec,valley_location_in_speech_fft_20melsec]=findpeaks(-speech_fft_energy_sec_in_20mel);
+    [valley_value_in_speech_fft_20melsec,valley_location_in_speech_fft_20melsec]=findpeaksreverse(valley_value_in_speech_fft_20melsec,valley_location_in_speech_fft_20melsec);
+    if numel(peaks_location_in_speech_fft_20melsec)>0 && numel(valley_location_in_speech_fft_20melsec)>0
+        audio.peaks_location_in_speech_fft_20melsecnum=length(peaks_location_in_speech_fft_20melsec); %mel分段峰值数
+        [~,loc]=max(peaks_value_in_speech_fft_20melsec);
+        audio.peaks_location_in_speech_fft_20melsecmaxloc=peaks_location_in_speech_fft_20melsec(loc);%Mel分段频谱峰值位
+        audio.peaks_location_in_speech_fft_20melsecrange=peaks_location_in_speech_fft_20melsec(end)-peaks_location_in_speech_fft_20melsec(1);%Mel分段频谱峰值跨度
+        audio.valley_location_in_speech_fft_20melsecnum=length(valley_location_in_speech_fft_20melsec); %mel分段谷数
+        [~,loc]=max(valley_value_in_speech_fft_20melsec);
+        audio.valley_location_in_speech_fft_20melsecminloc=valley_location_in_speech_fft_20melsec(loc);%Mel分段频谱谷值位
+        audio.valley_location_in_speech_fft_20melsecnumrange=valley_location_in_speech_fft_20melsec(end)-valley_location_in_speech_fft_20melsec(1);%Mel分段频谱谷值跨度
+    else
+        audio.peaks_location_in_speech_fft_20melsecnum=0;
+        audio.peaks_location_in_speech_fft_20melsecmaxloc=0;%Mel分段频谱峰值位
+        audio.peaks_location_in_speech_fft_20melsecrange=0;%Mel分段频谱峰值跨度
+        audio.valley_location_in_speech_fft_20melsecnum=0; %mel分段谷数        
+        audio.valley_location_in_speech_fft_20melsecminloc=0;%Mel分段频谱谷值位
+        audio.valley_location_in_speech_fft_20melsecnumrange=0;%Mel分段频谱谷值跨度
+    end    
+       
+    %peaks_location_in_speech_fft_20melsecnum=numel(peaks_location_in_speech_fft_20melsec);
+    %peaks_value_in_speech_fft_20melsecnum=numel(peaks_value_in_speech_fft_20melsec);
+    %valley_location_in_speech_fft_20melsecnum=numel(valley_location_in_speech_fft_20melsec);
+    %valley_value_in_speech_fft_20melsecnum=numel(valley_value_in_speech_fft_20melsec);
+    
+    
+    %%%%插入-按照梅尔频率分割方法完成，20个频段峰值累加，极大，极小位置以及宽度分析完成%%%20190609加上mel频谱幅值累加
+    
+    %%%%求语音频率谱曲线的前五项共振峰%%%%
+    Yvoicefftformant=abs(Yvoicefft(1:dotnum));  %20190609加上abs，求共振峰
+    %size(Yvoicefft)
+    %numel(find(Yvoicefft~=0))
+    %numel(find(Yvoicefft==0))
+    %numel(find(Yvoicefftformant>0))
+    %numel(find(Yvoicefftformant==0))
+    left=rem(length(Yvoicefftformant),128);
+    Yvoicefftformant=reshape(Yvoicefftformant(1:end-left),128,[]);
+    Yvoicefftformant=max(Yvoicefftformant,[],1);%变成了每128点位的峰值曲线
+    [loc,value]=findpeaks(Yvoicefftformant);    
+    %[loc1,value1]=findpeaks(value);    
+    %loc1=loc(loc1); 
+    if numel(value)>1
+    speechformant=[value,loc];    
+    speechformant=abs(sortrows(speechformant,-1));  %高低排列
+    order=1:5;
+    speechformant1_5=[speechformant(1:5,:) order'];
+    speechformant1_5=[sortrows(speechformant1_5,2) order'];  %完工，列1时序排列幅值。2，处于所有频域峰值的位置；3幅值排名；4位置排名
+    audio.formantheight=speechformant1_5(:,1);  %共振峰最大5项高度值顺序排列
+    audio.formantrank=speechformant1_5(:,3); %共振峰最大5项排名
+    audio.formantloc=f(speechformant1_5(:,2)*128); %共振峰最大5项频率值
+    audio.maxformantheight=max(audio.formantheight);%最大共振峰
+    audio.maxformanttoaverage=audio.maxformantheight/mean(Yvoicefftformant);%最大共振峰与均值比
+    audio.maxformantloc=max(audio.formantloc);%最大共振峰频率
+    else
+        speechformant1_5=zeros(5,5);
+        audio.formantheight=speechformant1_5(:,1);  %共振峰最大5项高度值顺序排列
+        audio.formantrank=speechformant1_5(:,3); %共振峰最大5项排名
+        audio.formantloc=f(speechformant1_5(:,2)*128); %共振峰最大5项频率值
+        audio.maxformantheight=max(audio.formantheight);%最大共振峰
+        audio.maxformanttoaverage=audio.maxformantheight/mean(Yvoicefftformant);%最大共振峰与均值比
+        audio.maxformantloc=max(audio.formantloc);%最大共振峰频率
+    end
+    %%%%求语音频率谱曲线的前五项共振峰完成%%%%
+   
+ 
+    
+    %%%%分频段计算能量值-次声波信息提取%%%%
+    sec=round((NFFT/2+1)/(20*2/fs_ori*(NFFT/2+1)));   %每20Hz的采样点数
+    E_nFre1_400=zeros(20,1);
+    E_vFre1_400=zeros(20,1);
+    E_subvFre2_40=zeros(20,1);
+    E_subnFre2_40=zeros(20,1);
+    E_subv_nFre2_40ratio=zeros(20,1);
+    E_subpvFre2_40=zeros(20,1);
+    if (size(Ynoisefft,1)/sec)<20
+        fre_400=floor(size(Ynoisefft,1)/sec);
+    else
+        fre_400=20;
+    end
+    for i=1:fre_400
+        %size(Ynoisefft)
+        %size(Yvoicefft)
+        %sec
+        %dotnum
+        %NFFT
+        %size(speech)        
+        Fre_n1_400sec=Ynoisefft(sec*(i-1)+1:sec*i);
+        Fre_v1_400sec=Yvoicefft(sec*(i-1)+1:sec*i);
+        subFre_noise2_40=Ynoisefft(round(2*2/fs_ori*(NFFT/2+1))*(i-1)+1:round(2*2/fs_ori*(NFFT/2+1))*i);
+        subFre_voice2_40=Yvoicefft(round(2*2/fs_ori*(NFFT/2+1))*(i-1)+1:round(2*2/fs_ori*(NFFT/2+1))*i);
+               
+        E_nFre1_400(i)=sum(abs(Fre_n1_400sec));%.*Fre_n1_400sec)); %20-400hz的20个数字表示0-400段的噪音频率强度
+        E_vFre1_400(i)=sum(abs(Fre_v1_400sec));%.*Fre_v1_400sec));%20-400hz的20个数字表示0-400段的语音频率强度
+        E_subnFre2_40(i)=sum(abs(subFre_noise2_40));%.*subFre_noise2_40));%2-40hz的20个数字表示1-40Hz段的噪音频率强度总和 
+        E_subvFre2_40(i)=sum(abs(subFre_voice2_40));%.*subFre_voice2_40));%2-40hz的20个数字表示1-40Hz段的语音频率强度   
+        %2-40hz的20个数字表示1-40Hz段的语音频率强度与噪音频率强度的比值
+        E_subv_nFre2_40ratio(i)=(E_subvFre2_40(i)/voicetimeratio)/(E_subnFre2_40(i)/noisetimeratio);
+        %2-40hz的20个数字表示1-40Hz段的剩余语音频率强度
+        E_subpvFre2_40(i)=minus(E_subvFre2_40(i),E_subnFre2_40(i)*(voicetimeratio/noisetimeratio));
+    end
+    E_subvFre2_40=reshape(E_subvFre2_40,[],1); %2-40hz的20个数字表示1-40Hz段的剩余语音频率强度
+    [E_subFre1_20Hzmaxvalue,E_subFre1_20Hzmaxfre]=max(E_subvFre2_40(1:10));
+    
+    %次声波频率范围的噪音与语音能量强度总结
+    E_nsubFreintense1_20=E_nFre1_400(1)/noisetimeratio;%*(voicetimeratio/noisetimeratio);
+    E_vsubFreintense1_20=E_vFre1_400(1)/voicetimeratio;
+    E_subFre_noiseratio=E_nFre1_400(1)/(mean(abs(Ynoisefft(1:(NFFT/2+1))))*sec); %次声波频率范围的噪音能量强度与1-8000全频段噪音平均强度比
+    E_subFre_voiceratio=E_vFre1_400(1)/(mean(abs(Yvoicefft(1:(NFFT/2+1))))*sec); %次声波频率范围的语音能量强度与1-8000全频段语音平均强度比
+    audio.E_nsubFreintense1_20=E_nsubFreintense1_20;  %换算到语音时长对应的噪音次声波能量强度累加
+    audio.E_vsubFreintense1_20=E_vsubFreintense1_20;  %本就是语音时长对应的混合语音次声波能量强度累加
+    audio.E_subFre_noiseratio=E_subFre_noiseratio;  %噪音的次声波含量比
+    audio.E_subFre_voiceratio=E_subFre_voiceratio;  %混合语音的次声波含量比
+    audio.E_subFre_purevoiceratio=sum(E_subvFre2_40)/(mean(abs(Yvoicefft(1:(NFFT/2+1))))*sec); %混合语音的次声波含量
+    audio.E_subFre1_20Hz10num=E_subvFre2_40(1:10);  %（2-20Hz）10个次声波强度指标
+    audio.E_subFre1_20Hzmaxvalue=E_subFre1_20Hzmaxvalue;  %次声最大值
+    audio.E_subFre1_20Hzmaxfre=E_subFre1_20Hzmaxfre*2;  %次声最大值频率上限
+    %次声波频率范围的噪音与语音能量强度总结完成                    
+    E_subnFre2_40ratiorectify=E_subnFre2_40*(voicetimeratio/noisetimeratio);
+    [p,S]=corrcoef(E_subnFre2_40ratiorectify,E_subvFre2_40);  %求取语音与噪音的低频次声波区域的相关性   
+    audio.E_subn_vcorrelation_para=p(1,2); %噪音区低频与语音区混合低频的相关系数，越大越相关
+    audio.E_subn_vcorrelation_sig=S(1,2);  %噪音区低频与语音区混合低频的相关显著性，越小越显著    
+    %次声波1-20Hz共振能量求得
+    %%%%独立1完成.次声波频率特征数据获取完毕%%%%
+    
+   
+    
+   
+    %%%%独立2.特征性数据，能量节奏的fft变换分析%%%%非共振峰
+    %%%%傅里叶变换以及寻找语音能量时序波动的频率谱特征%%%%
+    L=size(speech_FBEs_energy_frameline,2);
+    NFFT = 2^nextpow2(L);  %2的n次幂，作为频率采点的极值
+    voiceEfftline = fft(speech_FBEs_energy_frameline,NFFT)/L;
+    Efs=L/timespan ;  %针对分析数据的时间序列能量频率
+    f = Efs/2*linspace(0,1,NFFT/2+1);   %傅里叶变换后的频率分量
+    %时序语音能量波采样频率    
+    voiceEfftline=abs(voiceEfftline(1:NFFT/2+1));
+    [maxEF_location,maxEF_value]=findpeaks(voiceEfftline);  %为什么反过来了 位置在前，数值在后
+    if numel(maxEF_location)==0
+        [maxEF_value,maxEF_location]=max(voiceEfftline);
+    end
+    voiceEXXfftline=diff(diff(voiceEfftline)); %二次求导，寻找前期高值拐点,
+    k=1;
+    maxEF_valuepre=[];   
+    maxEF_locationpre=[];    
+    if numel(maxEF_location)==0
+       % continue
+    end
+    
+    for i=1:length(voiceEXXfftline)-1       
+        if voiceEXXfftline(i)>0 && voiceEXXfftline(i+1)<0 && (i+2)<maxEF_location(1);  %高值拐点，并非一定是峰值
+          maxEF_valuepre(k)=[voiceEfftline(i+2) ];   %
+          maxEF_locationpre(k)=i+2;
+          k=k+1;         
+        end
+    end
+    maxEF_value=reshape(maxEF_value,[],1);
+    maxEF_location=reshape(maxEF_location,[],1);
+    maxEF_valuepre=reshape(maxEF_valuepre,[],1);
+    maxEF_locationpre=reshape(maxEF_locationpre,[],1);
+    maxEF_value=[maxEF_valuepre; maxEF_value];
+    %融合前期拐点与后期峰值，获取内含波偏峰值
+    maxEF_location=[maxEF_locationpre; maxEF_location];    
+    maxEF_location=maxEF_location(maxEF_value>mean(voiceEfftline)) ;   
+    maxEF_value=maxEF_value(maxEF_value>mean(voiceEfftline)) ; 
+    audio.maxEF_frenum=numel(maxEF_value);%语音音量曲线频谱峰值数
+    
+    %maxEF_fre=f(maxEF_location); 
+    %%%%audio模块%%%%
+    if numel(maxEF_value)>=5       
+        maxEF_rhythm=[maxEF_value,maxEF_location];        
+        maxEF_rhythm=sortrows(maxEF_rhythm,-1);  %di
+        order=1:5;
+        maxEF_rhythm=[maxEF_rhythm(1:5,:) order'];
+        maxEF_rhythm=[sortrows(maxEF_rhythm,2) order'];  %完工，列1时序排列幅值。2，处于所有频域峰值的位置；3幅值排名；4位置排名
+        audio.maxEF_rhythmheight=maxEF_rhythm(:,1);  %音律峰最大5项高度值时间顺序排列
+        audio.maxEF_rhythmrank=maxEF_rhythm(:,3); %音律峰最大5项高度时间顺序排名
+        audio.maxEF_rhythmfre=f(maxEF_rhythm(:,2)); %音律峰最大5项频率时间顺序   
+        audio.maxEF_rhythmnum=numel(maxEF_value); %音律共振峰数量
+        audio.maxEF_valuemean=mean(maxEF_value);%语音节奏频率平均能量
+        lastEF_value=maxEF_value(end);
+        lastEF_fre=maxEF_location(end);
+        audio.lastEF_value=lastEF_value;%最末梢语调节律幅值
+        audio.lastEF_fre=lastEF_fre;%最末梢语调节律频率
+    elseif numel(maxEF_value)<5 && numel(maxEF_value)>=1  
+        maxEF_rhythmheight=[0 0 0 0 0];  %音律峰最大5项高度值顺序排列
+        maxEF_rhythmrank=[0 0 0 0 0]; %音律峰最大5项高度时间顺序排名
+        maxEF_rhythmfre=[0 0 0 0 0]; %音律峰最大5项频率时间顺序排名
+        order=1:numel(maxEF_value);
+        maxEF_rhythm=[maxEF_value,maxEF_location];        
+        maxEF_rhythm=sortrows(maxEF_rhythm,-1);  %第一列降序       
+        maxEF_rhythm=[maxEF_rhythm order'];
+        maxEF_rhythm=[sortrows(maxEF_rhythm,2) order'];  %完工，列1时序排列幅值。2，处于所有频域峰值的位置；3幅值排名；4位置排名
+        maxEF_rhythmheight(1:numel(maxEF_value))=maxEF_rhythm(:,1);  %共振峰最大5项高度值顺序排列
+        maxEF_rhythmrank(1:numel(maxEF_value))=maxEF_rhythm(:,3);
+        maxEF_rhythmfre(1:numel(maxEF_value))=f(maxEF_rhythm(:,2));
+        
+        audio.maxEF_rhythmheight=maxEF_rhythmheight;  %音律峰最大5项高度值顺序排列
+        audio.maxEF_rhythmrank=maxEF_rhythmrank;        %音律峰最大5项排名
+        audio.maxEF_rhythmfre=maxEF_rhythmfre; %音律峰最大5项频率对应
+        audio.maxEF_rhythmnum=numel(maxEF_value);  %音律共振峰数量
+        audio.maxEF_valuemean=mean(maxEF_value);%语音节奏频率平均能量
+        lastEF_value=maxEF_value(end);
+        lastEF_fre=maxEF_location(end);
+        audio.lastEF_value=lastEF_value;%最末梢语调节律幅值
+        audio.lastEF_fre=lastEF_fre;%最末梢语调节律频率
+    else
+        audio.maxEF_rhythmheight=[0 0 0 0 0];  %音律峰最大5项高度值顺序排列
+        audio.maxEF_rhythmrank=[0 0 0 0 0]; %音律峰最大5项排名
+        audio.maxEF_rhythmfre=[0 0 0 0 0]; %音律峰最大5项频率时间顺序排名 
+        audio.maxEF_rhythmnum=0;%音律共振峰数量
+        audio.maxEF_valuemean=0;%语音节奏频率平均能量     
+        audio.lastEF_value=0;%最末梢语调节律幅值
+        audio.lastEF_fre=0;%最末梢语调节律频率
+    end              
+    %%%%语言时序能量频率波动的傅里叶变换频率谱完成%%%%
+    %sound(speech,fs)              
+    
+    %%%%独立1.开始针对Mfcc的FBEs为主，进行纵向分析，以频率特征为主，不分析时序特征%%%%
+    %%%%设想，要实现的猜想：
+    %%%%1.语音FBEs每个音的峰值数量，表达了其语音的频率连贯性，数每一次发音的波纹数量，强度。
+    
+    %%%%此时，滤波不影响次生波段的频率特征，可以进行滤波分析，也可以省去%%%%
+        %{
+    %%%%有了噪音段，语音段，就可以滤波了%%%%
+    %%%%滤波开始
+    speechpurenoise=speech(find(markspeechtimeline==0));  %噪音段噪音原始信号
+    noise   =speechpurenoise(find(speechpurenoise));
+    
+        if numel(noise)<(fs/40+500)
+            g=round((fs/40+500)/numel(noise))*2;
+            noise=noise(:,ones(g,1));            
+            noise=reshape(noise,[],1);
+        end            
+    %================INPUT PARAMS==================
+    params.nwin     = 1024;
+    params.show_log = false;
+    params.noise    = noise;
+    %================PROCESSING====================               
+    denoised_speech = NMFdenoiser(speech,fs,params);
+    speech=reshape(denoised_speech,[],1);
+    %}
+    %%%%滤波结束
+    %sound(denoised_speech,fs)
+    %sound(speech(find(markspeechtimeline==0)),fs)  
+    %%%%分段语音，语音中间的噪音，并依据噪音时长提取语音间隔特点%%%%
+    if isempty(find(markFBEtimeline==1,1,'first'))
+        vstart=1;
+        vend=length(markFBEtimeline);
+    else
+        vstart=find(markFBEtimeline==1,1,'first');  %语音起始点帧数
+        vend=find(markFBEtimeline==1,1,'last') ; %语音终结点帧数
+    end
+    vstart=vstart
+    vend=vend
+    noisesumlength=numel(find(markFBEtimeline(vstart:vend)==0));   %噪音总帧数    
+    v_nline=diff(markFBEtimeline(vstart:vend));
+    noisebegan=find(v_nline==-1);
+    noiseend=find(v_nline==1);
+    noiselength=noiseend-noisebegan;
+    noiseheavypoint=round((noiseend+noisebegan)/2);
+    if numel(noiselength)>=3
+        noisesectionnum=length(noiselength); %语音间的噪音间隔段数，区分汉字
+        noisesectionlengthmean=mean(noiselength);%噪音间隔段时长均值，表达发音连贯性
+        noisesectionlengthstd=std(noiselength);%噪音间隔段时长标准差，表达发音距离差值
+        noisesectiontrending=polyfit(1:length(noiselength),reshape(noiselength,1,[]),1);
+        noiseintervaltrending=polyfit(1:noisesectionnum-1,reshape(diff(noiseheavypoint),1,[]),1);
+    elseif numel(noiselength)==2 || numel(noiselength)==1
+        noisesectionnum=length(noiselength);%语音间的噪音间隔段数，区分汉字
+        noisesectionlengthmean=mean(noiselength);%噪音间隔段时长均值，表达发音连贯性
+        noisesectionlengthstd=std(noiselength);%噪音间隔段时长标准差，表达发音距离差值
+        noisesectiontrending=0;
+        noiseintervaltrending=0;
+    else                    %isempty(noiselength)
+        noisesectionnum=0;
+        noisesectionlengthmean=0;
+        noisesectionlengthstd=0;
+        noisesectiontrending=0;
+        noiseintervaltrending=0;
+    end
+    
+        audio.noisesectionnum=noisesectionnum;
+        audio.noisesectionlengthmean=noisesectionlengthmean;
+        audio.noisesectionlengthstd=noisesectionlengthstd;
+        audio.noisesectiontrending=noisesectiontrending(1);%噪音时长趋势
+        audio.noiseintervaltrending=noiseintervaltrending(1);%噪音间隔时长趋势，负值为短，下焦气虚
+    %%%%分段语音，语音中间的噪音，并依据噪音时长提取语音间隔特点完成%%%%
+    FBEsline=sum(FBEs,1);
+    [~,I]=max(FBEsline);
+    FBEs_Fre_vsecmax=FBEs(:,I);   
+    %FBEs_Fre_vsecmax=max(FBEs(:,markFBEtimeline==1),[],2);%整条音频分频能量极值获取
+    FBEs_Fre_vsecmean=mean(FBEs(:,markFBEtimeline==1),2); %/speechtimerate;每一段对话的平均mel频率能量分布
+    audio.FBEs_Fre_secmax=FBEs_Fre_vsecmax/(fs_ori); %1-20melfre最大值
+    audio.FBEs_Fre_secmean=FBEs_Fre_vsecmean/fs_ori;%1-20melfre均值
+    %100.5Hz，215.7Hz，345.5Hz，492.0Hz，655.3Hz，839.6Hz，1048.9Hz，1285.5Hz，1551.4Hz，1850.8Hz，
+    %2190.0Hz，2571.1Hz，3000.3Hz，3483.9Hz，4030.4Hz，4645.9Hz，5338.9Hz，6122Hz，7005.5Hz，8000.0Hz。
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %MAG部分，第三次修订20190901开始。我的功能输出
+    %[value,line]=max(FBEs_Fre_vsecmean)   %人耳识别效果
+    %%%%单音检测部分持续性评价%%%%
+    [~,order]=sort(FBEs_Fre_vsecmean/fs_ori,'descend');%排序，降序
+    FBEsmaxline=FBEs(order(1),vstart:vend)/fs_ori; %最大幅值频率时序区间
+    FBEssecline=FBEs(order(2),vstart:vend)/fs_ori;%第二幅值频率时序区间
+    FBEsthiline=FBEs(order(3),vstart:vend)/fs_ori;%第三幅值频率时序区间
+    FBEsvoicevolume=mean(mean(FBEs(:,vstart:vend)/fs_ori));
+    %%%%最高值频段计算%%%%
+    p=polyfit(1:length(FBEsmaxline),FBEsmaxline,2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsmaxlinecurve=p(1);%最高能频段能量二次趋势
+    FBEsmaxlinetrend=p(2);%最高能频段能量一次趋势
+    p=polyfit(1:length(abs(diff(FBEsmaxline))),abs(diff(FBEsmaxline)),2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsmaxlinediffcurve=p(1);%最高能频段波纹二次趋势
+    FBEsmaxlinedifftrend=p(2);%最高能频段波纹一次趋势
+    FBEsmaxfreband=order(1);%最高能频段序号
+    %求音量波动特征，波动幅度极值以及波动位置
+    [peaks_location_in_FBEsmaxline,peakvolume]=findpeaks(FBEsmaxline);
+    [peakvolume,peakorder]=sort(peakvolume,'descend');
+        maxbandmeanvolrate=mean(FBEsmaxline)/mean(mean(FBEs(:,vstart:vend)/fs_ori));%最高频段能量比语音均能
+    if numel(peakvolume)>=3
+        maxbandmaxpeakvolrate=peakvolume(1)/mean(FBEsmaxline);%最高能频段最大能量比平均能量
+        maxbandsecpeakvolrate=peakvolume(2)/mean(FBEsmaxline);%最高能频段第二能量比平均能量
+        maxbandthipeakvolrate=peakvolume(3)/mean(FBEsmaxline);%最高能频段第三能量比平均能量
+        maxbandmaxpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(1))/length(FBEsmaxline); %位置，最高能频段最大峰值位置
+        maxbandsecpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(2))/length(FBEsmaxline);%位置，最高能频段第二峰值位置
+        maxbandthipeaklocrate=peaks_location_in_FBEsmaxline(peakorder(3))/length(FBEsmaxline); %位置，最高能频段第三峰值位置
+    elseif numel(peakvolume)==2
+        maxbandmaxpeakvolrate=peakvolume(1)/mean(FBEsmaxline);%最高能频段最大能量比平均能量
+        maxbandsecpeakvolrate=peakvolume(2)/mean(FBEsmaxline);%最高能频段第二能量比平均能量
+        %maxbandthipeakvolrate=peakvolume(3)/mean(FBEsmaxline);%最高能频段第三能量比平均能量
+        maxbandmaxpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(1))/length(FBEsmaxline); %位置，最高能频段最大峰值位置
+        maxbandsecpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(2))/length(FBEsmaxline);%位置，最高能频段第二峰值位置
+        %maxbandthipeaklocrate=peaks_location_in_FBEsmaxline(peakorder(3))/length(FBEsmaxline); %位置，最高能频段第三峰值位置
+        maxbandthipeakvolrate=0;
+        maxbandthipeaklocrate=0;
+    elseif numel(peakvolume)==1
+        maxbandmaxpeakvolrate=peakvolume(1)/mean(FBEsmaxline);%最高能频段最大能量比平均能量
+        %maxbandsecpeakvolrate=peakvolume(2)/mean(FBEsmaxline);%最高能频段第二能量比平均能量
+        %maxbandthipeakvolrate=peakvolume(3)/mean(FBEsmaxline);%最高能频段第三能量比平均能量
+        maxbandmaxpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(1))/length(FBEsmaxline); %位置，最高能频段最大峰值位置
+        %maxbandsecpeaklocrate=peaks_location_in_FBEsmaxline(peakorder(2))/length(FBEsmaxline);%位置，最高能频段第二峰值位置
+        %maxbandthipeaklocrate=peaks_location_in_FBEsmaxline(peakorder(3))/length(FBEsmaxline); %位置，最高能频段第三峰值位置
+        maxbandsecpeakvolrate=0;
+        maxbandsecpeaklocrate=0;
+        maxbandthipeakvolrate=0;
+        maxbandthipeaklocrate=0;
+    else
+        maxbandmaxpeakvolrate=0;
+        maxbandmaxpeaklocrate=0;
+        maxbandsecpeakvolrate=0;
+        maxbandsecpeaklocrate=0;
+        maxbandthipeakvolrate=0;
+        maxbandthipeaklocrate=0;
+    end
+    %%%%次高值频段计算%%%%
+    p=polyfit(1:length(FBEssecline),FBEssecline,2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsseclinecurve=p(1);%次高能频段能量二次趋势
+    FBEsseclinetrend=p(2);%次高能频段能量一次趋势
+    p=polyfit(1:length(abs(diff(FBEssecline))),abs(diff(FBEssecline)),2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsseclinediffcurve=p(1);%次高能频段波纹二次趋势
+    FBEsseclinedifftrend=p(2);%次高能频段波纹一次趋势
+    FBEssecfreband=order(2);%次高能频段序号
+    %求音量波动特征，波动幅度极值以及波动位置
+    [peaks_location_in_FBEssecline,peakvolume]=findpeaks(FBEssecline);
+    [peakvolume,peakorder]=sort(peakvolume,'descend');    
+    secbandmeanvolrate=mean(FBEssecline)/mean(mean(FBEs(:,vstart:vend)/fs_ori));%次高频段能量比语音均能
+    if numel(peakvolume)>=3 
+        secbandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%次高能频段最大能量比平均能量
+        secbandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%次高能频段第二能量比平均能量
+        secbandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%次高能频段第三能量比平均能量
+        secbandmaxpeaklocrate=peaks_location_in_FBEssecline(peakorder(1))/length(FBEssecline); %位置，次高能频段最大峰值位置
+        secbandsecpeaklocrate=peaks_location_in_FBEssecline(peakorder(2))/length(FBEssecline);%位置，次高能频段第二峰值位置
+        secbandthipeaklocrate=peaks_location_in_FBEssecline(peakorder(3))/length(FBEssecline); %位置，次高能频段第三峰值位置
+    elseif numel(peakvolume)==2
+        secbandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%次高能频段最大能量比平均能量
+        secbandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%次高能频段第二能量比平均能量
+        %secbandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%次高能频段第三能量比平均能量
+        secbandmaxpeaklocrate=peaks_location_in_FBEssecline(peakorder(1))/length(FBEssecline); %位置，次高能频段最大峰值位置
+        secbandsecpeaklocrate=peaks_location_in_FBEssecline(peakorder(2))/length(FBEssecline);%位置，次高能频段第二峰值位置
+        %secbandthipeaklocrate=peaks_location_in_FBEssecline(peakorder(3))/length(FBEssecline); %位置，次高能频段第三峰值位置
+        secbandthipeakvolrate=0;
+        secbandthipeaklocrate=0;
+    elseif numel(peakvolume)==1
+        secbandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%次高能频段最大能量比平均能量
+        %secbandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%次高能频段第二能量比平均能量
+        %secbandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%次高能频段第三能量比平均能量
+        secbandmaxpeaklocrate=peaks_location_in_FBEssecline(peakorder(1))/length(FBEssecline); %位置，次高能频段最大峰值位置
+        %secbandsecpeaklocrate=peaks_location_in_FBEssecline(peakorder(2))/length(FBEssecline);%位置，次高能频段第二峰值位置
+        %secbandthipeaklocrate=peaks_location_in_FBEssecline(peakorder(3))/length(FBEssecline); %位置，次高能频段第三峰值位置
+        secbandsecpeakvolrate=0;
+        secbandsecpeaklocrate=0;
+        secbandthipeakvolrate=0;
+        secbandthipeaklocrate=0;
+    else
+        secbandmaxpeakvolrate=0;
+        secbandmaxpeaklocrate=0;
+        secbandsecpeakvolrate=0;
+        secbandsecpeaklocrate=0;
+        secbandthipeakvolrate=0;
+        secbandthipeaklocrate=0;
+    end
+    %%%%第三值频段计算%%%%
+    p=polyfit(1:length(FBEsthiline),FBEsthiline,2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsthilinecurve=p(1);%第三能频段能量二次趋势
+    FBEsthilinetrend=p(2);%第三能频段能量一次趋势
+    p=polyfit(1:length(diff(FBEsthiline)),abs(diff(FBEsthiline)),2);%二阶，p(1)二次曲率，p（2）一次斜率
+    FBEsthilinediffcurve=p(1);%第三能频段波纹二次趋势
+    FBEsthilinedifftrend=p(2);%第三能频段波纹一次趋势       
+    FBEsthifreband=order(3);%第三能频段序号
+    %求音量波动特征，波动幅度极值以及波动位置
+    [peaks_location_in_FBEsthiline,peakvolume]=findpeaks(FBEsthiline);
+    [peakvolume,peakorder]=sort(peakvolume,'descend');    
+    thibandmeanvolrate=mean(FBEssecline)/mean(mean(FBEs(:,vstart:vend)/fs_ori));%第三频段能量比语音均能
+    if numel(peakvolume)>=3 
+        thibandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%第三能频段最大能量比平均能量
+        thibandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%第三能频段第二能量比平均能量
+        thibandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%第三能频段第三能量比平均能量
+        thibandmaxpeaklocrate=peaks_location_in_FBEsthiline(peakorder(1))/length(FBEssecline); %位置，第三能频段最大峰值位置
+        thibandsecpeaklocrate=peaks_location_in_FBEsthiline(peakorder(2))/length(FBEssecline);%位置，第三能频段第二峰值位置
+        thibandthipeaklocrate=peaks_location_in_FBEsthiline(peakorder(3))/length(FBEssecline); %位置，第三能频段第三峰值位置    
+    elseif numel(peakvolume)==2
+        thibandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%第三能频段最大能量比平均能量
+        thibandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%第三能频段第二能量比平均能量
+        %thibandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%第三能频段第三能量比平均能量
+        thibandmaxpeaklocrate=peaks_location_in_FBEsthiline(peakorder(1))/length(FBEssecline); %位置，第三能频段最大峰值位置
+        thibandsecpeaklocrate=peaks_location_in_FBEsthiline(peakorder(2))/length(FBEssecline);%位置，第三能频段第二峰值位置
+        %thibandthipeaklocrate=peaks_location_in_FBEsthiline(peakorder(3))/length(FBEssecline); %位置，第三能频段第三峰值位置    
+        thibandthipeakvolrate=0;
+        thibandthipeaklocrate=0;
+    elseif numel(peakvolume)==1
+        thibandmaxpeakvolrate=peakvolume(1)/mean(FBEssecline);%第三能频段最大能量比平均能量
+        %thibandsecpeakvolrate=peakvolume(2)/mean(FBEssecline);%第三能频段第二能量比平均能量
+        %thibandthipeakvolrate=peakvolume(3)/mean(FBEssecline);%第三能频段第三能量比平均能量
+        thibandmaxpeaklocrate=peaks_location_in_FBEsthiline(peakorder(1))/length(FBEssecline); %位置，第三能频段最大峰值位置
+        %thibandsecpeaklocrate=peaks_location_in_FBEsthiline(peakorder(2))/length(FBEssecline);%位置，第三能频段第二峰值位置
+        %thibandthipeaklocrate=peaks_location_in_FBEsthiline(peakorder(3))/length(FBEssecline); %位置，第三能频段第三峰值位置    
+        thibandsecpeakvolrate=0;
+        thibandsecpeaklocrate=0;
+        thibandthipeakvolrate=0;
+        thibandthipeaklocrate=0;
+    else
+        thibandmaxpeakvolrate=0;
+        thibandmaxpeaklocrate=0;
+        thibandsecpeakvolrate=0;
+        thibandsecpeaklocrate=0;
+        thibandthipeakvolrate=0;
+        thibandthipeaklocrate=0;
+    end
+    FBEsmax_secfreband_dis=abs(order(1)-order(2));
+    if order(1)>order(2)
+        FBEsmax_secfreband_pos=1;
+    else
+        FBEsmax_secfreband_pos=-1;
+    end
+    FBEsmax_secEcomp=FBEs_Fre_vsecmean(order(1))/FBEs_Fre_vsecmean(order(2));
+    FBEsmax_thifreband_dis=abs(order(1)-order(3));
+    if order(1)>order(3)
+        FBEsmax_thifreband_pos=1;
+    else
+        FBEsmax_thifreband_pos=-1;
+    end
+    FBEsmax_thiEcomp=FBEs_Fre_vsecmean(order(1))/FBEs_Fre_vsecmean(order(3));
+    FBEssec_thifreband_dis=abs(order(2)-order(3));
+    if order(2)>order(3)
+        FBEssec_thifreband_pos=1;
+    else
+        FBEssec_thifreband_pos=-1;
+    end
+    FBEssec_thiEcomp=FBEs_Fre_vsecmean(order(2))/FBEs_Fre_vsecmean(order(3));
+    
+    audio.FBEsvoicevolume=FBEsvoicevolume;%FBEs平均语音音量
+    audio.FBEsmaxlinecurve=FBEsmaxlinecurve;%最高能频段能量二次趋势
+    audio.FBEsmaxlinetrend=FBEsmaxlinetrend;%最高能频段能量一次趋势
+    audio.FBEsmaxlinediffcurve=FBEsmaxlinediffcurve;%最高能频段波纹二次趋势
+    audio.FBEsmaxlinedifftrend=FBEsmaxlinedifftrend;%最高能频段波纹一次趋势
+    audio.FBEsmaxfreband=FBEsmaxfreband;%最高能频段序号
+    audio.maxbandmeanvolrate=maxbandmeanvolrate;%最高频段能量比语音均能
+    audio.maxbandmaxpeakvolrate=maxbandmaxpeakvolrate;%最高能频段最大能量比平均能量
+    audio.maxbandsecpeakvolrate=maxbandsecpeakvolrate;%最高能频段第二能量比平均能量
+    audio.maxbandthipeakvolrate=maxbandthipeakvolrate;%最高能频段第三能量比平均能量
+    audio.maxbandmaxpeaklocrate=maxbandmaxpeaklocrate;%位置，最高能频段最大峰值位置
+    audio.maxbandsecpeaklocrate=maxbandsecpeaklocrate;%位置，最高能频段第二峰值位置
+    audio.maxbandthipeaklocrate=maxbandthipeaklocrate;%位置，最高能频段第三峰值位置
+    
+    
+    
+    audio.FBEsseclinecurve=FBEsseclinecurve;%次高能频段能量二次趋势
+    audio.FBEsseclinetrend=FBEsseclinetrend;%次高能频段能量一次趋势
+    audio.FBEsseclinediffcurve=FBEsseclinediffcurve;%次高能频段波纹二次趋势
+    audio.FBEsseclinedifftrend=FBEsseclinedifftrend;%次高能频段波纹一次趋势    
+    audio.FBEssecfreband=FBEssecfreband;%次高能频段序号
+    audio.secbandmeanvolrate=secbandmeanvolrate;%次高频段能量比语音均能
+    audio.secbandmaxpeakvolrate=secbandmaxpeakvolrate;%次高能频段最大能量比平均能量
+    audio.secbandsecpeakvolrate=secbandsecpeakvolrate;%次高能频段第二能量比平均能量
+    audio.secbandthipeakvolrate=secbandthipeakvolrate;%次高能频段第三能量比平均能量
+    audio.secbandmaxpeaklocrate=secbandmaxpeaklocrate;%位置，次高能频段最大峰值位置
+    audio.secbandsecpeaklocrate=secbandsecpeaklocrate;%位置，次高能频段第二峰值位置
+    audio.secbandthipeaklocrate=secbandthipeaklocrate;%位置，次高能频段第三峰值位置
+        
+    
+    audio.FBEsthilinecurve=FBEsthilinecurve;%第三能频段能量二次趋势
+    audio.FBEsthilinetrend=FBEsthilinetrend;%第三能频段能量一次趋势
+    audio.FBEsthilinediffcurve=FBEsthilinediffcurve;%次高能频段波纹二次趋势
+    audio.FBEsthilinedifftrend=FBEsthilinedifftrend;%次高能频段波纹一次趋势  
+    audio.FBEsthifreband=FBEsthifreband;%第三能频段序号
+    audio.thibandmeanvolrate=thibandmeanvolrate;%次高频段能量比语音均能
+    audio.thibandmaxpeakvolrate=thibandmaxpeakvolrate;%次高能频段最大能量比平均能量
+    audio.thibandsecpeakvolrate=thibandsecpeakvolrate;%次高能频段第二能量比平均能量
+    audio.thibandthipeakvolrate=thibandthipeakvolrate;%次高能频段第三能量比平均能量
+    audio.thibandmaxpeaklocrate=thibandmaxpeaklocrate;%位置，次高能频段最大峰值位置
+    audio.thibandsecpeaklocrate=thibandsecpeaklocrate;%位置，次高能频段第二峰值位置
+    audio.thibandthipeaklocrate=thibandthipeaklocrate;%位置，次高能频段第三峰值位置
+    
+    audio.FBEsmax_secfreband_dis=FBEsmax_secfreband_dis;%最高第二峰距离
+    audio.FBEsmax_secfreband_pos=FBEsmax_secfreband_pos;%最高第二峰位置
+    audio.FBEsmax_secEcomp=FBEsmax_secEcomp;%最高第二峰比值
+    audio.FBEsmax_thifreband_dis=FBEsmax_thifreband_dis;%最高第三峰距离
+    audio.FBEsmax_thifreband_pos=FBEsmax_thifreband_pos;%最高第三峰位置
+    audio.FBEsmax_thiEcomp=FBEsmax_thiEcomp;%最高第三峰比值
+    audio.FBEssec_thifreband_dis=FBEssec_thifreband_dis;%第二第三峰距离
+    audio.FBEssec_thifreband_pos=FBEssec_thifreband_pos;%第二第三峰位置
+    audio.FBEssec_thiEcomp=FBEssec_thiEcomp;%第二第三峰比例
+    %三者分析下来后，主要的重心动态方式就可以观察
+    drumwengfeel=FBEs_Fre_vsecmean(1)*20/sum(FBEs_Fre_vsecmean);%统治力，力度感（<100Hz）
+    maleforcefeel=sum(FBEs_Fre_vsecmean(2:3))*20/(sum(FBEs_Fre_vsecmean)*2);%男性语音力度（150-300Hz）
+    mainvoicefeel=FBEs_Fre_vsecmean(4)*20/sum(FBEs_Fre_vsecmean);%语音主音区（300-500）
+    basefrefeel=sum(FBEs_Fre_vsecmean(5:7))*20/(sum(FBEs_Fre_vsecmean)*3);%轮廓感，强则前凸，弱则畏惧
+    brightnessfeel=sum(FBEs_Fre_vsecmean(8:11))*20/(sum(FBEs_Fre_vsecmean)*4);%明亮感，通透性，顺畅感
+    coughfeel=sum(FBEs_Fre_vsecmean(12:15))*20/(sum(FBEs_Fre_vsecmean)*4);%咳嗽音，耳腔谐振，清亮感
+    toothvoicefeel=sum(FBEs_Fre_vsecmean(14:16))*20/(sum(FBEs_Fre_vsecmean)*3);%齿音
+    transparentfeel=sum(FBEs_Fre_vsecmean(16:20))*20/(sum(FBEs_Fre_vsecmean)*4);%穿透力，清晰度，透明度
+    lowtohighfeel=sum(FBEs_Fre_vsecmean(1:7))/sum(FBEs_Fre_vsecmean(12:20)*7/9); %低高音比
+    lowtomidfeel=sum(FBEs_Fre_vsecmean(1:7))/sum(FBEs_Fre_vsecmean(8:11)*7/4); %低中音比
+    midtohighfeel=sum(FBEs_Fre_vsecmean(8:11))/sum(FBEs_Fre_vsecmean(12:20)*4/9); %低中音比
+    audio.drumwengfeel=drumwengfeel;
+    audio.maleforcefeel=maleforcefeel;
+    audio.mainvoicefeel=mainvoicefeel;
+    audio.basefrefeel=basefrefeel;
+    audio.brightnessfeel=brightnessfeel;
+    audio.coughfeel=coughfeel;
+    audio.toothvoicefeel=toothvoicefeel;
+    audio.transparentfeel=transparentfeel;
+    audio.lowtohighfeel=lowtohighfeel;  %表示上中下三焦的力量
+    audio.lowtomidfeel=lowtomidfeel;
+    audio.midtohighfeel=midtohighfeel;
+    
+    
+    %melenergy_20sec_sum; %能量特征分布
+    drumweng=speech_fft_energy_sec_in_20mel(1)*20/sum(speech_fft_energy_sec_in_20mel);
+    maleforce=sum(speech_fft_energy_sec_in_20mel(2:3))*20/sum(speech_fft_energy_sec_in_20mel);%男性语音力度（150-300Hz）
+    mainvoice=speech_fft_energy_sec_in_20mel(4)*20/sum(speech_fft_energy_sec_in_20mel);%语音主音区（300-500）
+    basefre=sum(speech_fft_energy_sec_in_20mel(5:7))*20/sum(speech_fft_energy_sec_in_20mel);%轮廓感，强则前凸，弱则畏惧
+    brightness=sum(speech_fft_energy_sec_in_20mel(8:11))*20/sum(speech_fft_energy_sec_in_20mel);%明亮感，通透性，顺畅感
+    cough=sum(speech_fft_energy_sec_in_20mel(12:15))*20/sum(speech_fft_energy_sec_in_20mel);%咳嗽音，耳腔谐振，清亮感
+    toothvoice=sum(speech_fft_energy_sec_in_20mel(14:16))*20/sum(speech_fft_energy_sec_in_20mel);%齿音
+    transparent=sum(speech_fft_energy_sec_in_20mel(16:20))*20/sum(speech_fft_energy_sec_in_20mel);%穿透力，清晰度，透明度
+    lowtohigh=sum(speech_fft_energy_sec_in_20mel(1:7))/sum(speech_fft_energy_sec_in_20mel(12:20)); %低高音比
+    lowtomid=sum(speech_fft_energy_sec_in_20mel(1:7))/sum(speech_fft_energy_sec_in_20mel(8:11)); %低中音比
+    midtohigh=sum(speech_fft_energy_sec_in_20mel(8:11))/sum(speech_fft_energy_sec_in_20mel(12:20)); %低中音比
+    audio.drumweng=drumweng;
+    audio.maleforce=maleforce;
+    audio.mainvoice=mainvoice;
+    audio.basefre=basefre;
+    audio.brightness=brightness;
+    audio.cough=cough;
+    audio.toothvoice=toothvoice;
+    audio.transparent=transparent;
+    audio.lowtohigh=lowtohigh ; %表示上中下三焦的力量
+    audio.lowtomid=lowtomid ;
+    audio.midtohigh=midtohigh; 
+    %%%%1.MAG扩展板FBE，纵向每帧频率特征计算后，求得整体频域特征的时序变化趋势%%%%
+    
+   %FBEs_example=FBEs(:,1:10);
+    FBEsvoice=FBEs/round(fs_ori/2);  %此时的FBEs仍然为原始的FBEs未加改变。
+    %size(FBEs)
+    if ~isempty(find(markFBEtimeline==1, 1))
+        FBEsvoice(:,markFBEtimeline==0)=0;%噪音区设置为0,但是如果没有识别到语音，那就整体都算
+    end
+    FBEsvoice(:,1:beepend)=0; 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%-角徵宫商羽-分析-20200306%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    size(find(FBEsvoice(3,:)>=0));   
+    FBEsvoiceline=sum(FBEsvoice,1); %语音功率线
+    [location,value]=findpeaks(FBEsvoiceline) ;   
+    FBEsvoicepeak=FBEsvoice(:,location)';  %转化为20列的行向量
+    if isempty(location)
+        [value,location]=max(FBEsvoiceline) ;
+        FBEsvoicepeak=FBEsvoice(:,location)';
+    end
+    max_FBEsvoice20=max(FBEsvoicepeak,[],2);  %行向量最大值
+    min_FBEsvoice20=min(FBEsvoicepeak,[],2);  %行向量最小值
+    [FBEsn,FBEsm]=size(FBEsvoicepeak)
+    
+    maxrank=repmat(max_FBEsvoice20,1,FBEsm);  %M为mel分段数，本例为20
+    minrank=repmat(min_FBEsvoice20,1,FBEsm);
+    %size(minrank)
+    %size(maxrank)
+    %size(FBEsvoicepeak)
+    FBEsvoicepeak=(FBEsvoicepeak-minrank)./(maxrank-minrank);%归一化完成。
+    [m,n]=size(max_five20);
+     %%%%%%补丁%%%%%%%
+    tail=zeros(m,mfcc_M-n);
+    max_five50=cat(2,max_five20,tail);
+    max_five50=max_five50(:,1:mfcc_M);
+    
+    wuyin_zhi=zeros(1,size(FBEsvoicepeak,1));
+    wuyin_jie=zeros(1,size(FBEsvoicepeak,1));
+    wuyin_diao=zeros(1,size(FBEsvoicepeak,1));
+    wuyin_chazhi=zeros(1,size(FBEsvoicepeak,1));
+    for i=1:FBEsn
+        FBEsvoicenow=repmat(FBEsvoicepeak(i, :),m,1)
+        diffi=FBEsvoicenow-max_five50;  %矩阵差值
+        line=sum(abs(diffi),2);  %矩阵每行求和
+        [minvalue,I1]=min(line);      %寻找差距最小行列数
+        wuyin_chazhi(i)=minvalue;
+        wuyin3=fivetonerank5(I1,:);
+        wuyin_zhi(i)=wuyin3(1);
+        wuyin_jie(i)=wuyin3(2);
+        wuyin_diao(i)=wuyin3(3);         
+    end
+
+     tyinzhi=tabulate(wuyin_zhi(:));
+     tyinjie=tabulate(wuyin_jie(:));
+     tyindiao=tabulate(wuyin_diao(:));
+     [per,I1]=max(tyinzhi(:,3));
+     audio.yinzhi=tyinzhi(I1,1); %音质特点（结论）
+     audio.yinzhirate=per;     %最多音质出现率（结论）
+     [per,I1]=max(tyinjie(:,3));
+     audio.yinjie=tyinjie(I1,1); %音阶特点（结论）
+     audio.yinjierate=per;    %最多音阶出现率（结论）
+     [per,I1]=max(tyindiao(:,3));
+     audio.yindiao=tyindiao(I1,1); %音调特点（结论）
+     audio.yindiaorate=per;     %最多音调出现率（结论）
+     
+     wuyinchamean=mean(wuyin_chazhi);
+     wuyinchastd=std(wuyin_chazhi);
+     [maxsimilarwuyincha,I1]=min(wuyin_chazhi);
+     audio.yinzhisimilar=wuyin_zhi(I1); %最像音质特点（结论）
+     audio.yinjiesimilar=wuyin_jie(I1); %最像音阶特点（结论）
+     audio.yindiaosimilar=wuyin_diao(I1); %最像音调特点（结论）
+     audio.wuyinchamean=wuyinchamean;  %音比类似度均值（结论）
+     audio.wuyinchastd=wuyinchastd; %音比类似度标准差（结论）
+     audio.maxsimilarwuyincha=maxsimilarwuyincha; %最高类似差值（结论）
+     audio.wuyinpeakpoint=size(FBEsvoicepeak,1); %取音点数
+
+     
+    FBEs_Fre_vsecmax;%整条音频分频能量极值获取
+    %FBEs_Fre_vsecmean;
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%-角徵宫商羽-分析-20200306完成%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+    MAG(:,markFBEtimeline==0)=0;
+    MAG(:,1:beepend)=0;    
+    Xrule=1:numel(markFBEtimeline);
+    size(markFBEtimeline);
+    size(Xrule);
+    size(FBEsvoice);
+    if isempty(find(markFBEtimeline==1, 1))
+        Xrule(:,1:beepend)=0;
+        speechpureloc=find(Xrule>0); %纯语音的时序位置帧点
+    else
+        Xrule(:,markFBEtimeline==0)=0;%噪音区设置为0
+        Xrule(:,1:beepend)=0;     
+        %speechpureloc=markFBEtimeline; %纯语音的时序位置帧点
+        speechpureloc=find(Xrule>0); %纯语音的时序位置帧点
+    end
+    %Xrule=find(Xrule>0);
+    %size(Xrule)
+    %size(markFBEtimeline)
+    %size(MAG)
+    if size(FBEsvoice,2)>numel(Xrule)
+        markFBEtimeline=markFBEtimeline(1:numel(Xrule));
+        FBEsvoice=FBEsvoice(:,1:numel(Xrule));
+    end    
+    [MAGrow,~]=size(MAG);   %int16,fs=16000时，MAG行常量512, 2的9次方，fs=4800,MAG=2048.列变量504看秒数,频率上限8000Hz
+    
+     %MAGnonzero=  numel( find(Xrule));
+        
+        MAGcurve=zeros(1,length(markFBEtimeline));%单帧最细波纹
+        MAGdistance=zeros(1,length(markFBEtimeline));%单帧高低差
+        MAG_c_d=zeros(1,length(markFBEtimeline));%单帧波纹率
+        MAGpeaknum=zeros(1,length(markFBEtimeline));%单帧峰值数
+        %MAGpeak2num=zeros(1,length(markFBEtimeline));%单帧峰值数
+        MAGhighfre=zeros(5,length(markFBEtimeline));%最高五项音量值对应的频率
+        MAGhighvalue=zeros(5,length(markFBEtimeline));%最高五项音量值
+        MAGlowfre=zeros(5,length(markFBEtimeline));%最低五项音量值对应的频率
+        MAGlowvalue=zeros(5,length(markFBEtimeline));%最低五项音量值
+        MAGlowfpure=zeros(1,length(markFBEtimeline));%纯低音聚集区
+        MAGhighfpure=zeros(1,length(markFBEtimeline));%纯高音聚集区
+    for p=1:length(markFBEtimeline)
+        if sum(MAG(1:10:end,p))==0   %非语音段跳过
+            continue
+        else
+            MAGcurve(p)=sum(abs(diff(MAG(1:end,p))));
+            MAGdistance(p)=max(MAG(1:end,p))-min(MAG(1:end,p));
+            MAG_c_d(p)=MAGcurve(p)/MAGdistance(p);
+            [max1MAGlocation,max1MAGvalue]=findpeaks(MAG(1:end,p));%一级极值，属于小波纹制高点
+            MAGpeaknum(p)=length(max1MAGlocation);
+            %[max2MAGlocation,max2MAGvalue]=findpeaks(max1MAGlocation);
+            %MAGpeak2num(p)=length(max2MAGlocation);
+            %max2MAGvalue=max1MAGvalue(max2MAGvalue);%变成原始MAG序列的频率序号点
+            max1MAGlocation=reshape(max1MAGlocation,[],1);
+            max1MAGvalue=reshape(max1MAGvalue,[],1);
+            [~,order]=sort(max1MAGvalue);
+            if numel(order)>=5
+                MAGhighfre(1:5,p)=round(max1MAGlocation(order(1:5))*(8000/MAGrow));%最高的五项频率位置
+                MAGhighvalue(1:5,p)=max1MAGvalue(order(1:5));%最高的五项频率幅值
+                MAGlowfre(1:5,p)=round(max1MAGlocation(order(end-4:end))*(8000/MAGrow));%最低的五项频率位置
+                MAGlowvalue(1:5,p)=max1MAGvalue(order(end-4:end));%最低的五项频率幅值
+
+                MAGlowfrepure=min(MAGlowfre):1:max(MAGlowfre); %判断低音区是否存在高音
+                if isempty(ismember(MAGhighfre,MAGlowfrepure))
+                    MAGlowfpure(p)=1;
+                end
+                MAGhighfrepure=min(MAGhighfre):1:max(MAGhighfre);%判断高音区是否存在低音
+                if isempty(ismember(MAGlowfre,MAGhighfrepure))
+                    MAGhighfpure(p)=1;
+                end
+            elseif numel(order)<=5 && numel(order)>=2
+                MAGhighfre(1:numel(order),p)=round(max1MAGlocation(order(1:numel(order)))*(8000/MAGrow));%最高的五项频率位置
+                MAGhighvalue(1:numel(order),p)=max1MAGvalue(order(1:numel(order)));%最高的五项频率幅值
+                MAGlowfre(1:numel(order),p)=round(max1MAGlocation(order(end-numel(order)+1:end))*(8000/MAGrow));%最低的五项频率位置
+                MAGlowvalue(1:numel(order),p)=max1MAGvalue(order(end-numel(order)+1:end));%最低的五项频率幅值
+
+                MAGlowfrepure=min(MAGlowfre):1:max(MAGlowfre); %判断低音区是否存在高音
+                if isempty(ismember(MAGhighfre,MAGlowfrepure))
+                    MAGlowfpure(p)=1;
+                end
+                MAGhighfrepure=min(MAGhighfre):1:max(MAGhighfre);%判断高音区是否存在低音
+                if isempty(ismember(MAGlowfre,MAGhighfrepure))
+                    MAGhighfpure(p)=1;
+                end
+            elseif numel(order)==1
+                MAGhighfre(1:numel(order),p)=round(max1MAGlocation(order(1:numel(order)))*(8000/MAGrow));%最高的五项频率位置
+                MAGhighvalue(1:numel(order),p)=max1MAGvalue(order(1:numel(order)));%最高的五项频率幅值
+                MAGlowfre(1:numel(order),p)=round(max1MAGlocation(order(end-numel(order)+1:end))*(8000/MAGrow));%最低的五项频率位置
+                MAGlowvalue(1:numel(order),p)=max1MAGvalue(order(end-numel(order)+1:end));%最低的五项频率幅值
+                MAGlowfpure(p)=0;
+                MAGhighfpure(p)=0;
+            end
+        end
+    end
+    MAGlowfpureper=sum(MAGlowfpure)/length(markFBEtimeline);%纯低音区占所有的比例
+    MAGhighfpureper=sum(MAGhighfpure)/length(markFBEtimeline);%纯高音区占所有的比例
+    MAGmixfpureper=numel(find(MAGlowfpure+MAGhighfpure)==2)/length(markFBEtimeline);%高低音纯分开占所有的比例
+    
+    audio.MAGpeaknummean=mean(MAGpeaknum);%MAG一级极值数量均值
+    audio.MAGpeaknumstd=std(MAGpeaknum);%MAG一级极值数量标准差
+    [MAGpeakmax,MAGpeakmaxloc]=max(MAGpeaknum);
+    audio.MAGpeakmax=MAGpeakmax;%MAG一级极值(波纹）数量最大值
+    audio.MAGpeakmaxloc=MAGpeakmaxloc;%MAG一级极值(波纹）数量最大值位置
+    [b ,~]=polyfit(1:length(MAGpeaknum),MAGpeaknum,1);
+    audio.MAGpeaknumtrending=b(1);%MAG一级极值(波纹）数量趋势
+    %audio.MAGpeak2nummean=mean(MAGpeak2num);
+    %audio.MAGpeak2numstd=std(MAGpeak2num);
+    
+    MAGhighfre1=zeros(1,length(markFBEtimeline));%
+    [MAGhighvalue1,ord]=max(MAGhighvalue,[],1);%最大音量频率范围下的音量值时序曲线
+    ord=reshape(ord,[],1);%变换列向量
+    x=(1:length(ord))';%变换前列序号
+    p=[ord x];
+    for ll=1:length(ord)
+     MAGhighfre1(ll)=MAGhighfre(p(ll,1),p(ll,2)); %最高频率时序曲线
+    end
+    audio.MAGhighfre1mean=mean(MAGhighfre1);%MAG每帧峰值频率均值（全局时序）
+    audio.MAGhighfre1std=std(MAGhighfre1);%MAG每帧峰值频率标准差（全局时序）
+    audio.MAGhighvalue1mean=mean(MAGhighvalue1);%MAG每帧峰值幅值均值（全局时序）
+    audio.MAGhighvalue1std=std(MAGhighvalue1);%MAG每帧峰值幅值标准差（全局时序）
+    
+    [MAGhighvalue11,loc]=max(MAGhighvalue1);
+    monumentstatue=MAGhighvalue11/mean(MAGhighvalue1);%时序整体，最高音量频率下的音量值高出所有最高音量的程度，表达愤怒或喜悦语音的程度，下面通过diff区分愤怒与喜悦
+    MAGhighvalue11loc=loc/length(MAGhighvalue1);%时序整体，高值点，偏前则上焦盛，偏后则下焦盛
+    [b ,~]=polyfit(Xrule(1:length(MAGhighvalue1)),MAGhighvalue1,1) ; %拟合单帧峰值频率能量的变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    max_energy_trending=b(1) ;  %时序整体，拟合单帧峰值频率能量的线性趋势
+    
+    MAGhighfre1flux=sum(abs(diff(MAGhighfre1)))/(max(MAGhighfre1)-min(MAGhighfre1));%最高频率的波动范围；时序；越高表明频率特征波动越大，喜悦性越强；
+    [MAGhighfre11,loc]=max(MAGhighfre1);
+    MAGhighfre11loc=loc/length(MAGhighfre11);%高值点，偏前则喜悦，或愤怒偏胆怯，偏后则愤怒偏底气足。中神旺盛
+    [b ,~]=polyfit(Xrule(1:length(MAGhighfre1)),MAGhighfre1,1) ; %拟合单帧峰值频率能量的变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    max_frequency_trending=b(1) ;  %拟合单帧峰值频率值的线性趋势
+    
+    audio.MAGlowfpureper=MAGlowfpureper;%纯低音区无高值占有时序比例（全局时序）
+    audio.MAGhighfpureper=MAGhighfpureper;%纯高音区无低值占有时序比例（全局时序）
+    audio.MAGmixfpureper=MAGmixfpureper;%高低音分开分布的时序比例（全局时序）
+    audio.monumentstatue=monumentstatue;%全局最高峰值点占山脊均值比重（全局时序）
+    audio.MAGhighvalue11loc=MAGhighvalue11loc;%全局最高峰值点占山脊位置比例（全局时序）
+    audio.max_energy_trending=max_energy_trending;%全局最高峰值时序动态趋势（全局时序）
+    audio.MAGhighfre1flux=MAGhighfre1flux;%全局最高峰值频率时序波纹率（全局时序）
+    audio.MAGhighfre11loc=MAGhighfre11loc;%全局最高峰值频率占山脊位置比例（全局时序）
+    audio.max_frequency_trending=max_frequency_trending;%全局最高峰值频率时序动态趋势（全局时序）
+    %%%%MAG倍频计算%%%%
+    MAGhighvalue1D=zeros(1,length(markFBEtimeline));%2倍倍频值
+    MAGhighvalue1DperM=zeros(1,length(markFBEtimeline));%2倍倍频值与极值的比例
+    MAGhighvalue1Dperm=zeros(1,length(markFBEtimeline));%2倍倍频值与均值的比例
+    MAGhighvalue1H=zeros(1,length(markFBEtimeline));%0.5倍倍频值
+    MAGhighvalue1HperM=zeros(1,length(markFBEtimeline));%0.5倍倍频值与极值的比例
+    MAGhighvalue1Hperm=zeros(1,length(markFBEtimeline));%0.5倍倍频值与均值的比例
+    for i=1:length(markFBEtimeline)
+        if MAGhighvalue1(i)>0 && MAGhighfre1(i)<4000
+            MAGhighvalue1D(i)=MAG(round(MAGhighfre1(i)*(MAGrow/8000)*2),i);%2倍，倍频值
+            MAGhighvalue1DperM(i)=MAGhighvalue1D(i)/MAGhighvalue1(i);
+            MAGhighvalue1Dperm(i)=MAGhighvalue1D(i)/mean(MAG(1:end,i));
+            MAGhighvalue1H(i)=MAG(round(MAGhighfre1(i)*(MAGrow/8000)*0.5),i);%0.5倍，倍频值
+            MAGhighvalue1HperM(i)=MAGhighvalue1H(i)/MAGhighvalue1(i);
+            MAGhighvalue1Hperm(i)=MAGhighvalue1H(i)/mean(MAG(1:end,i));
+        end
+    end
+            
+    [b ,~]=polyfit(Xrule(1:length(MAGhighvalue1DperM)),MAGhighvalue1DperM,1) ; %拟合单帧2倍峰值频率能量比最大值的能量变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    Doublefre_energy_toMtrending=b(1);
+    [b ,~]=polyfit(Xrule(1:length(MAGhighvalue1Dperm)),MAGhighvalue1Dperm,1) ; %拟合单帧2倍峰值频率能量比均值的能量变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    Doublefre_energy_tomtrending=b(1);
+    
+    [b ,~]=polyfit(Xrule(1:length(MAGhighvalue1HperM)),MAGhighvalue1HperM,1) ; %拟合单帧0.5倍峰值频率能量比最大值的能量变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    Halffre_energy_toMtrending=b(1);
+    [b ,~]=polyfit(Xrule(1:length(MAGhighvalue1Hperm)),MAGhighvalue1Hperm,1) ; %拟合单帧0.5倍峰值频率能量比均值的能量变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    Halffre_energy_tomtrending=b(1);
+    
+    %MAGhighfre11
+    
+    audio.MAG_c_dmean=mean(MAG_c_d);%单帧波纹率均值；波纹率越高越友好。
+    audio.MAG_c_dstd=std(MAG_c_d);%单帧波纹率标准差；
+    [MAG_c_dmax,loc]=max(MAG_c_d);
+    audio.MAG_c_dmax=MAG_c_dmax;%单帧波纹率最大值（全局时序）
+    audio.MAG_c_dmaxloc=loc/length(MAGhighvalue1);%最大波纹率位置
+    [b ,~]=polyfit(Xrule(1:length(MAG_c_d)),MAG_c_d,1) ; %拟合单帧峰值频率能量的变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    audio.MAG_c_d_trending=b(1) ;  %波纹率的线性趋势
+    
+    
+    audio.MAGhighvalue1DperMmean=mean(MAGhighvalue1DperM);%二倍频能量比该最大能量频能量的均值
+    audio.MAGhighvalue1DperMstd=std(MAGhighvalue1DperM);%二倍频能量比该最大能量频能量的标准差
+    audio.Doublefre_energy_toMtrending=Doublefre_energy_toMtrending;%二倍频能量比该最大能量频能量的时域波动趋势
+    
+    audio.MAGhighvalue1Dpermmean=mean(MAGhighvalue1Dperm);%二倍频能量比每帧全频能量均值时序数据的均值
+    audio.MAGhighvalue1Dpermstd=std(MAGhighvalue1Dperm);%二倍频能量比每帧全频能量均值时序数据的标准差
+    audio.Doublefre_energy_tomtrending=Doublefre_energy_tomtrending;%二倍频能量比每帧全频能量均值时序数据的时域波动趋势
+    %%%%
+    audio.MAGhighvalue1HperMmean=mean(MAGhighvalue1HperM);%二倍频能量比该最大能量频能量的均值
+    audio.MAGhighvalue1HperMstd=std(MAGhighvalue1HperM);%二倍频能量比该最大能量频能量的标准差
+    audio.Halffre_energy_toMtrending=Halffre_energy_toMtrending;%二倍频能量比该最大能量频能量的时域波动趋势
+    
+    audio.MAGhighvalue1Hpermmean=mean(MAGhighvalue1Hperm);%二倍频能量比每帧全频能量均值时序数据的均值
+    audio.MAGhighvalue1Hpermstd=std(MAGhighvalue1Hperm);%二倍频能量比每帧全频能量均值时序数据的标准差
+    audio.Halffre_energy_tomtrending=Halffre_energy_tomtrending;%二倍频能量比每帧全频能量均值时序数据的时域波动趋势
+    
+    
+    %%%%MAG思路，频谱特征中的频率叠加，频率峰值能量变化，都应该可以体现出语音特征%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %MAG部分，第三次修订20190901开始。我的功能输出完成
+    %大黄功能输出暂停
+    %sss
+    %FBEsvoice=FBEsvoice(:,vstart:vend);%&markFBEtimeline==0语音+噪音段，噪音仍然在设置成0的部分，防止时间位移
+    %size(FBEsvoice,2)
+    peaks_value_in_FBEsvoice=cell(1,length(FBEsvoice));%每帧波峰数，高表明不连续
+    peaks_location_in_speech_fft_20melsec=cell(1,length(FBEsvoice));%每帧波峰位
+    peaks_number_per_frame=zeros(1,length(FBEsvoice));%每帧语音波峰数量集
+    peaks_E_mean_per_frame=zeros(1,length(FBEsvoice));%每帧语音波峰能量均值
+    peaks_E_std_per_frame=zeros(1,length(FBEsvoice));%每帧语音波峰能量标准差    
+    maxFre_volume=zeros(1,length(FBEsvoice));%每帧语音波峰能量极值数字集
+    maxFrelocation=zeros(1,length(FBEsvoice));  %语音重音频率位置变化谱线
+    allvalue=zeros(1,length(FBEsvoice));%每帧语音所有频率能量总和
+    maxFre_energy_to_sum_rate=zeros(1,length(FBEsvoice));%每帧语音重音频率能量占总能量百分比,高表明单一    
+    %maxrank=zeros(length(FBEsvoice),7);%每帧语音波峰能量占总能量的百分比
+    
+    curvecliffsum=zeros(1,length(FBEsvoice));
+    curveintensitysum=zeros(1,length(FBEsvoice));
+    heightdis=zeros(1,length(FBEsvoice));
+    curvecliffrate=zeros(1,length(FBEsvoice));
+    curveintensityrate=zeros(1,length(FBEsvoice));
+    curvecliffrateeven=zeros(1,length(FBEsvoice));
+    curveintensityrateeven=zeros(1,length(FBEsvoice));
+    
+
+    for j=1:size(FBEsvoice,2);
+        [peaks_location_in_speech_fft_20melsec{j},peaks_value_in_FBEsvoice{j}]=findpeaks(FBEsvoice(:,j));  %计算每Hz的能量，就要除以       
+        peaks_E_mean_per_frame(j)=mean(peaks_value_in_FBEsvoice{j});
+        peaks_E_std_per_frame(j)=std(peaks_value_in_FBEsvoice{j});
+        peaks_number_per_frame(j)=numel(peaks_value_in_FBEsvoice{j}); 
+        if isequal(peaks_value_in_FBEsvoice{j},0) || isempty(peaks_value_in_FBEsvoice{j})
+            peaks_E_mean_per_frame(j)=[];
+            peaks_E_std_per_frame(j)=[];%防止独裁情况下的伪相似性。
+        end
+        [maxFre_volume(j),maxFrelocation(j)]=max(FBEsvoice(:,j),[],1);    
+        allvalue(j)=sum(FBEsvoice(:,j));
+        maxFre_energy_to_sum_rate(j)=abs(maxFre_volume(j)/(allvalue(j)+0.001));%防止分母零值出现
+        %maxrank(j,:)=[maxFre_volume(j),maxFrelocation(j),allvalue(j),maxFre_energy_to_sum_rate(j),peaknumber(j),peak_Emean(j),peak_Estd(j)];
+        curvecliffsum(j)=sum(abs(diff(FBEsvoice(:,j)))); %每帧波纹的数值随时间轴的变化    占据总高度差的
+        curveintensitysum(j)=sum(abs(diff(diff(FBEsvoice(:,j)))));%曲率强度
+        heightdis(j)=max(FBEsvoice(:,j))-min(FBEsvoice(:,j));%每帧能量高度差
+        curvecliffrate(j)=curvecliffsum(j)/heightdis(j); %陡峭率(真实）
+        curveintensityrate(j)=curveintensitysum(j)/heightdis(j);  %曲率(真实）
+        %curveintensityrate(j)=curveintensitysum(j)/mean(FBEsvoice(:,j));%曲率(语音能量归一化）
+        curvecliffrateeven(j)=curvecliffsum(j)/mean(FBEsvoice(:,j));%陡峭率(语音能量归一化）
+        curveintensityrateeven(j)=curveintensitysum(j)/mean(FBEsvoice(:,j));%曲率(语音能量归一化）
+    end
+                
+     
+    
+    %%%%基础语音FBEs信息获取结束，进入指标抽提阶段
+    %peakvaluepure{:}=peakvalue{find(allvalue)};
+    %=xline(speechpureloc);  %公用的x轴
+    Xrule; 
+    %Xrulesize=size(Xrule)
+    %peaks_E_mean_per_framesize=size(peaks_E_mean_per_frame)
+    %speechpurelocsize=size(speechpureloc)    
+    if length(peaks_E_mean_per_frame)>length(Xrule)
+        peaks_E_mean_per_frame=peaks_E_mean_per_frame(:,1:length(Xrule));
+    end
+    peak_Emeanpure=peaks_E_mean_per_frame(speechpureloc) ;%所有单帧峰值频率能量的均值联合曲线
+    [b ,~]=polyfit(Xrule(1:length(peaks_E_mean_per_frame)),peaks_E_mean_per_frame,1) ; %拟合单帧峰值频率能量的变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    maxFregroup_energy_trending=b(1) ;  %小于零，语音能量发生能量减低，代表中虚；大于零，趋势上升，语音能量上升，代表内热
+    if length(peaks_E_std_per_frame)>length(Xrule)
+        peaks_E_std_per_frame=peaks_E_std_per_frame(:,1:length(Xrule));
+    end
+    peak_Estdpure=peaks_E_std_per_frame(speechpureloc) ;%所有单帧峰值频率能量的标准差联合曲线
+    [b ,~]=polyfit(Xrule(1:length(peaks_E_std_per_frame)),peaks_E_std_per_frame,1);  %拟合最大语音能量频段的能量的频率分布范围变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    maxFre_convergence_trending=b(1);   %小于零，语音能量发生均一化分布，代表坚定；大于零，趋势上升，语音能量发生差异扩增，代表轻飘
+    
+    peaknummean=mean(peaks_number_per_frame(speechpureloc));%单帧重音数（整体1个数据）
+    peaknumstd=std(peaks_number_per_frame(speechpureloc));%重音数变异区间标准差std（整体1个数据）
+    %maxFre_volumesize=size(maxFre_volume)
+    %peaks_E_mean_per_framesize=size(peaks_E_mean_per_frame)
+    maxFre_volumepure=maxFre_volume(speechpureloc);    
+    [b ,~]=polyfit(Xrule(1:length(maxFre_volume)),maxFre_volume,1);  %拟合最大语音能量频段的能量波动趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    maxFre_energy_trending=b(1);   %小于零，最大频段的能量趋势下降，大于零，最大频段的能量趋势上升
+    
+    maxlocationpure=maxFrelocation(speechpureloc);    
+    [b ,~]=polyfit(Xrule,maxFrelocation,1);  %拟合最大语音能量频段的能量波动趋势，线性，b1为斜率，斜率下降表明音能衰减；
+    maxFre_location_trending=b(1);   %小于零，最大频段的音调趋势下降，大于零，最大频段的音调趋势上升
+        
+    maxFre_energy_to_sum_ratepure=maxFre_energy_to_sum_rate(speechpureloc);
+    [b ,~]=polyfit(Xrule,maxFre_energy_to_sum_rate,1);
+    maxFre_energy_to_sum_rate_trending=b(1);%小于零，最大频段的能量占总能量的比值趋势下降，大于零，最大频段的能量占总能量的比值趋势上升
+    %%%%%%%%%%%%%%%%%%%
+    %%%时序单字评测%%%%
+    %%%%%%%%%%%%%%%%%%%
+    %%%设计参数，时序特征计算开始。语音单调性：即某一段语音音频重音的位置以及时间长度；即倾向性的语音频率重音位谱
+    maxFrepositiontable=tabulate(maxFrelocation(speechpureloc));  %三列,1列频率分段；2列出现个数；3列百分比（需要加上%，否则累加是100不是1）
+    [q,w]=max(maxFrepositiontable(:,3));  %q表示该语音出现的最大频率时长占总时长的百分比（%），w是频率的段位（1-20）
+    mainfre_maxlengthrate=q;
+    mainfre_maxlengthloc=w;
+    k=find(maxFrepositiontable(:,3)==0);
+    if numel(k)>=2
+    nonmaxFrebandnum=numel(k); %非最大频率band数目
+    nonmaxFrebandmean=mean(k);  %非最大频率band均值
+    nonmaxFrebandstd=std(k);    %非最大频率band标准差
+    nonmaxFrebanddistance=k(end)-k(1);   %非最大频率band区间
+    elseif numel(k)==1
+        nonmaxFrebandnum=numel(k); %非最大频率band数目
+        nonmaxFrebandmean=mean(k);  %非最大频率band均值
+        nonmaxFrebandstd=0; 
+        nonmaxFrebanddistance=0;
+    else
+        nonmaxFrebandnum=0;
+        nonmaxFrebandmean=0;
+        nonmaxFrebandstd=0;
+        nonmaxFrebanddistance=0;
+    end
+    maxFrepositiontable(mainfre_maxlengthloc,:)=0;
+    [q,w]=max(maxFrepositiontable(:,3));  %q表示该语音出现的最大频率时长
+    secondfre_maxlengthrate=q;
+    secondfre_maxlengthloc=w;
+    
+    %%%%寻找频率
+    originloc=find(maxFrelocation(speechpureloc));   %原始的语音位置坐标
+    maxFre_location_sec=diff(maxFrelocation(speechpureloc));  %语音位置坐标上的一次diff，数量减1
+   
+    maxFre_location_sec(abs(maxFre_location_sec)<3)=0; %语音连续调，为语音单字发音区间，可对应上语音字数。
+    maxFre_location_sec(abs(maxFre_location_sec)>=3)=1;  %语音变调次数，可对应上语音间隔点，断点。
+    mainFresectionpoint=diff(maxFre_location_sec);  %二次diff，数量减2
+    startpoint=find(mainFresectionpoint==1);  %第一个断点发生的位置
+    endpoint=find(mainFresectionpoint==-1) ;  %第一个语句结束的位置
+    if numel(endpoint)>=1 && numel(startpoint)>=1
+        if endpoint(1)<startpoint(1)
+            endpoint=endpoint(2:end);
+        elseif endpoint(end)<startpoint(end)
+            startpoint=startpoint(1:end-1);     %完成首位格式的统一化
+        end
+    elseif numel(endpoint)<1 
+        endpoint(1)=numel(mainFresectionpoint);
+    elseif numel(startpoint)<1 
+        startpoint(1)=1;
+    end
+        end_point=startpoint(2:end);   %从此，startpoint变为了末尾 
+        start_point=endpoint(1:length(end_point));
+        charactertimelength=end_point-start_point;
+        characternum=numel(find(charactertimelength>3));
+        invalidloc=find(charactertimelength<=3);
+        start_point(invalidloc)=0;
+        end_point(invalidloc)=0;
+        start_point=nonzeros(start_point);   %首次变成了列向量
+        end_point=nonzeros(end_point);
+        %originloc;
+        %originloc(start_point(1:end):end_point(1:end))
+        %maxFrelocation(originloc(start_point:end_point))
+        %characternum;
+    
+    %%%%计算功率谱的极值点，从MFCC特征上发现用于对应频率谱的最大值%%%%  
+
+    [maxEframelocation,maxEframevalue]=findpeaks(speech_FBEs_energy_frameline);  %寻找波峰(原始能量波，需要识别得出的语音分区限制）
+    %[maxEframelocation,maxEframevalue]=findpeaksreverse(maxEframelocation,maxEframevalue);
+    chandougaoyin=1;
+    [minEframelocation,minEframevalue]=findpeaks(-speech_FBEs_energy_frameline); %寻找波谷
+    %[minEframelocation,minEframevalue]=findpeaksreverse(minEframelocation,minEframevalue);
+    chandoudiyin=1;
+ 
+    if (length(maxEframevalue)/timespan)>10     %如果显示语速过快，明显不对
+        [maxEframelocation1,maxEframevalue]=findpeaks(maxEframevalue);  %寻找二级波峰
+        chandougaoyin=length(maxEframelocation)/length(maxEframelocation1);
+        maxEframelocation=maxEframelocation(maxEframelocation1);   
+    end
+    if (length(minEframevalue)/timespan)>10
+        [minEframelocation1,minEframevalue]=findpeaks(minEframevalue); %寻找二级波谷
+        chandoudiyin=length(minEframelocation)/length(minEframelocation1);
+        minEframelocation=minEframelocation(minEframelocation1);        
+    end    
+    if numel(maxEframelocation)==0    
+        %[maxEframevalue,maxEframelocation]=max(speech_energy_frameline);
+        %maxEframelocation(1)=maxEframelocation;
+        %errordlg('voice sample unqualified，please try again','File Error');
+        quality_numel_minEframelocation=0;    
+    elseif isempty(minEframelocation)
+        quality_numel_minEframelocation=0;    
+    else
+        quality_numel_minEframelocation=1;   
+    end
+    if isempty(minEframelocation)
+        %[minEframevalue,minEframelocation]=min(speech_energy_frameline(speech_energy_frameline>0));
+        %minEframelocation=minEframelocation+vstart;
+        %errordlg('voice sample unqualified，please try again','File Error');
+        %quality_numel_minEframelocation=0;     
+    end    
+        selectedmaxEframe=find(maxEframevalue>mean(speech_FBEs_energy_frameline(markFBEtimeline==1)));%大于均值的峰值
+        maxEframevalue=maxEframevalue(selectedmaxEframe); 
+        maxEframelocation=maxEframelocation(selectedmaxEframe); %寻找确切的语音部位 
+    if numel(maxEframelocation)>1 
+        selectedminElocation=find((minEframelocation>maxEframelocation(1))&(minEframelocation<maxEframelocation(end)));
+        minEframelocation=minEframelocation(selectedminElocation);   
+        minEframevalue=minEframevalue(selectedminElocation);
+        minEframevalue=abs(minEframevalue); %最小能量值,反过来
+        %
+        minEframevalue=minEframevalue(minEframevalue<mean(speech_FBEs_energy_frameline(markFBEtimeline==1)));
+        minEframelocation=minEframelocation(minEframevalue<mean(maxEframevalue));
+        %}       
+        %markFBEtimeline
+        %vstart
+        %vend
+        %minEframelocation
+        minEframelocation1=minEframelocation;
+        if numel(minEframelocation)>0
+            if  vstart>minEframelocation(1)  %裁剪波峰波谷，进入语音频段内                               
+                minEframelocation1=minEframelocation1(minEframelocation1>vstart);    
+            end  
+            %vend
+            %minEframelocation
+            if  vend<minEframelocation(numel(minEframelocation))
+                if ~isempty(minEframelocation1)
+                    minEframelocation1=minEframelocation1(minEframelocation1<vend);  
+                else
+                    minEframelocation1=[];
+                end                    
+            end            
+            minEframelocation=[vstart; minEframelocation1; vend];  %波谷位置
+            minEframevalue=[speech_FBEs_energy_frameline(vstart); minEframevalue; speech_FBEs_energy_frameline(vend)];
+            %%%%进一步发现重叠部分，进而单一化波峰波谷%%%%
+            minEframelocation=reshape(minEframelocation,1,[]);
+            maxEframelocation=reshape(maxEframelocation,1,[]);
+            alllocation=[minEframelocation maxEframelocation];
+            alllocation=unique(sort(alllocation));  %单一化，序列化波峰波谷
+            mindistribution=zeros(1,length(minEframelocation));
+            for i=1:length(minEframelocation)
+                mindistribution(i)=find(alllocation==minEframelocation(i));
+            end    
+            continues=diff(mindistribution);
+            continues1=[0 reshape(continues,1,[])]   ; 
+            %compare=find(continues1==1)   %出现1的时候，该数值与其之前的数值是连着的，需要比较取小
+            i=2:length(minEframelocation);
+            head=find(and(continues1(i-1)~=1,continues1(i)==1));
+            tail=find(and(continues1(i-1)==1,continues1(i)~=1));
+            head=reshape(head,1,[]);   %由于第一个不是1，所以一定是head在前面
+            tail=reshape(tail,1,[]);
+            %sound(speech(markspeechtimeline==1),fs)
+            if length(tail)<length(head)
+                tail=[tail length(continues1)];
+            end
+            locpure=zeros(1,length(head));
+            for i=1:length(head)
+                [value, loc]=min(minEframevalue(head(i):tail(i))) ;
+                locpure(i)=head(i)+loc-1;
+            end
+            locori=find(continues1~=1);
+            %locori=[min(locori) max(locori)]
+            i=2:length(continues1);     
+            locori1=find(and(continues1(i-1)~=1,continues1(i)~=1));
+            locall=[locpure locori1 max(locori)];
+            locall=unique(sort(locall));
+            minEframevalue=minEframevalue(locall);            
+            minEframelocation=minEframelocation(locall); 
+            quality_numel_minEframelocation=1;
+        else
+            %errordlg('voice sample unqualified，please try again','File Error');
+            quality_numel_minEframelocation=0;
+        end
+    end
+    audio.quality_numel_minEframelocation=quality_numel_minEframelocation;
+    
+    %%%%进一步发现波谷重叠部分，进而取极小值，归一化波谷完成%%%%（第二次修订，20190712）
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%到此，基本确定一段话中的汉字个数，然后开始截取分析%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%面对每一个单独的汉字的特征进行归纳总结，然后对其特征进行总体分析%%%%
+    %
+    characternum1=length(minEframelocation);
+    chara_identified_per=characternum/characternum1;
+    %characternum1;
+    %diff(markFBEtimeline)'
+    %vadsectornum=find(diff(markFBEtimeline)==1)
+    %%%%%%%%%%%%%%%%%%单字150类参数预设%%%%%%%%%%%%%%%%%%%%%%
+    diff(minEframelocation);
+    meanCspeechtime=mean(diff(minEframelocation))*(Ts/1000);%判断语音低谷期间的均值
+    
+        characternum=length(minEframelocation)-1;
+        curvecliffchar=cell(1,characternum);
+        curvecliffchartrend=zeros(1,characternum);
+        curvecliffcharforce=zeros(1,characternum);
+        mcurvecliffcharacter=zeros(1,characternum);
+        scurvecliffcharacter=zeros(1,characternum);
+        curvecliffcharvalue=zeros(1,characternum);
+        curvecliffcharloc=zeros(1,characternum);
+        mcurvecliffcharlocrate=zeros(1,characternum);
+        scurvecliffcharlocrate=zeros(1,characternum);
+
+        curveintensitychar=cell(1,characternum);
+        curvetensitychartrend=zeros(1,characternum);
+        curvetensitycharforce=zeros(1,characternum);
+        mcurveintensitychar=zeros(1,characternum);
+        scurveintensitychar=zeros(1,characternum);
+        curveintensitycharvalue=zeros(1,characternum);
+        curveintensitycharloc=zeros(1,characternum);
+        curveintensitycharlocrate=zeros(1,characternum);
+
+        heightdischar=cell(1,characternum);
+        heightdischar_trending=zeros(1,characternum);
+        distanceattenuaterate=zeros(1,characternum);
+        heightdischar_force=zeros(1,characternum);
+        mheightdischaracter=zeros(1,characternum);
+        sheightdischaracter=zeros(1,characternum);
+
+        curvecliffratechar=cell(1,characternum);
+        curvecliffratechar_trend=zeros(1,characternum);
+        curveintensityratechar=cell(1,characternum);
+        curveintenseratechar_force=zeros(1,characternum);
+        mcurveintensityratechar=zeros(1,characternum);
+        scurveintensityratechar=zeros(1,characternum);
+        curveintensityratecharvalue=zeros(1,characternum);
+        curveintensityratecharloc=zeros(1,characternum);
+        curveintenseratecharlocrate=zeros(1,characternum);
+        curveintenseratechar_trend=zeros(1,characternum);
+        curvecliffratechar_force=zeros(1,characternum);
+        mcurvecliffratechar=zeros(1,characternum);
+        scurvecliffratechar=zeros(1,characternum);
+        curvecliffratecharvalue=zeros(1,characternum);
+        curvecliffratecharloc=zeros(1,characternum);
+        curvecliffratecharlocrate=zeros(1,characternum);
+
+        meanvaluecharacter=cell(1,characternum);
+        meanvaluecharacter_trend=zeros(1,characternum);
+        meanvaluecharacter_force=zeros(1,characternum);
+        mmeanvaluecharacter=zeros(1,characternum);
+        smeanvaluecharacter=zeros(1,characternum);
+        meanvaluecharactervalue=zeros(1,characternum);
+        meanvaluecharacterloc=zeros(1,characternum); 
+        meanvaluecharacterlocrate=zeros(1,characternum); 
+        
+    if meanCspeechtime<0.46 || chara_identified_per<2 %meanCspeechtime<0.996  %0.46   %characternum/characternum1<2   选择的替代系数，当单字发音过长，则替换方法。
+        for i=1:characternum
+            curvecliffchar{i}=curvecliffsum(minEframelocation(i):minEframelocation(i+1)); %单帧音频间临近声强差度和
+            %originplace=originloc(start_point(i)+2:end_point(i)+2);   %每一个字的时序位置序列
+            %curvecliffchar{i}=curvecliffsum(originplace); %单帧音频间临近声强差度和
+            XruleperC=1:length(curvecliffchar{i});
+            if length(curvecliffchar{i})>=3
+                [b ,~]=polyfit(XruleperC,curvecliffchar{i},2); %拟合单帧音频间临近声强差度和变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvecliffchartrend(i)=b(2);
+                curvecliffcharforce(i)=b(1);
+            else
+                curvecliffchartrend(i)=1;            
+                curvecliffcharforce(i)=1;
+            end
+            mcurvecliffcharacter(i)=mean(curvecliffchar{i});%单字帧间音频临近声强差度和均值        
+            scurvecliffcharacter(i)=std(curvecliffchar{i});%单字帧间音频临近声强差度和标准差
+            %curvecliffchar        
+            [curvecliffcharvalue(i),curvecliffcharloc(i) ]=max(curvecliffchar{i});
+            mcurvecliffcharlocrate(i)=(curvecliffcharloc(i)/length(curvecliffchar{i}));
+            curveintensitychar{i}=curveintensitysum(minEframelocation(i):minEframelocation(i+1)); %单字每帧频率曲线二次求导
+            %curveintensitychar{i}=curveintensitysum(originplace); %单字每帧频率曲线二次求导
+            if length(curveintensitychar{i})>=3
+                [b ,~]=polyfit(XruleperC,curveintensitychar{i},2) ; %拟合单帧频率能量的变化强度曲率趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvetensitychartrend(i)=b(2) ;
+                curvetensitycharforce(i)=b(1) ;   
+            else
+                curvetensitychartrend(i)=1;            
+                curvetensitycharforce(i)=1;
+            end
+            mcurveintensitychar(i)=mean(curveintensitychar{i});%单字帧间音频曲率和均值        
+            scurveintensitychar(i)=std(curveintensitychar{i});%单字帧间音频曲率和标准差
+            [curveintensitycharvalue(i),curveintensitycharloc(i) ]=max(curveintensitychar{i});%单字帧间音频曲率和最大值与最大位
+            curveintensitycharlocrate(i)=(curveintensitycharloc(i)/length(curvecliffchar{i}));
+
+            heightdischar{i}=heightdis(minEframelocation(i):minEframelocation(i+1));%每帧能量高度差
+            %heightdischar{i}=heightdis(originplace);%每帧能量高度差
+            if length(heightdischar{i})>=3
+                [b ,~]=polyfit(XruleperC,heightdischar{i},2) ; %拟合单帧频率能量的变化强度曲率趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                heightdischar_trending(i)=b(2) ;
+                heightdischar_force(i)=b(1) ;   
+            else
+                heightdischar_trending(i)=1;            
+                heightdischar_force(i)=1;
+            end
+            mheightdischaracter(i)=mean(heightdischar{i});%单字帧间高度差均值        
+            sheightdischaracter(i)=std(heightdischar{i});%单字帧间高度差标准差
+
+            curvecliffratechar{i}=curvecliffrate(minEframelocation(i):minEframelocation(i+1)); %陡峭率(真实）
+            %curvecliffratechar{i}=curvecliffrate(originplace);%陡峭率(真实）
+            if length(curvecliffratechar{i})>=3
+                [b ,~]=polyfit(XruleperC,curvecliffratechar{i},2) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvecliffratechar_trend(i)=b(2) ;
+                curvecliffratechar_force(i)=b(1) ;    
+            else
+                curvecliffratechar_trend(i)=1;            
+                curvecliffratechar_force(i)=1;
+            end
+            mcurvecliffratechar(i)=mean(curvecliffratechar{i});%单字陡峭率均值
+            scurvecliffratechar(i)=std(curvecliffratechar{i});%单字陡峭率标准差
+            [curvecliffratecharvalue(i),curvecliffratecharloc(i) ]=max(curvecliffratechar{i});
+            curvecliffratecharlocrate(i)=curvecliffratecharloc(i)/length(curvecliffchar{i});
+
+            curveintensityratechar{i}=curveintensityrate(minEframelocation(i):minEframelocation(i+1));  %曲率(真实）
+            %curveintensityratechar{i}=curveintensityrate(originplace);%曲率(真实）
+            if length(curveintensityratechar{i})>=3
+                [b ,~]=polyfit(XruleperC,curveintensityratechar{i},1) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curveintenseratechar_trend(i)=b(2) ;                        
+                curveintenseratechar_force(i)=b(1) ;
+            else
+                curveintenseratechar_trend(i)=1;            
+                curveintenseratechar_force(i)=1;
+            end
+            mcurveintensityratechar(i)=mean(curveintensityratechar{i});%单字曲率均值集合
+            scurveintensityratechar(i)=std(curveintensityratechar{i});%单字曲率标准差集合
+            [curveintensityratecharvalue(i),curveintensityratecharloc(i) ]=max(curveintensityratechar{i});
+            curveintenseratecharlocrate(i)=curveintensityratecharloc(i)/length(curvecliffchar{i});
+
+            meanvalue=allvalue/size(FBEsvoice,1);
+            meanvaluecharacter{i}=meanvalue(minEframelocation(i):minEframelocation(i+1));
+            %meanvaluecharacter{i}=meanvalue(originplace);
+            if length(meanvaluecharacter{i})>=3
+                [b ,~]=polyfit(XruleperC,meanvaluecharacter{i},1) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                meanvaluecharacter_trend(i)=b(2) ;
+                meanvaluecharacter_force(i)=b(1) ; 
+            else
+                meanvaluecharacter_trend(i)=1;            
+                meanvaluecharacter_force(i)=1;
+            end
+            mmeanvaluecharacter(i)=mean(meanvaluecharacter{i});%单字语音听觉响度均值
+            smeanvaluecharacter(i)=std(meanvaluecharacter{i});%单字语音听觉响度标准差
+            [meanvaluecharactervalue(i),meanvaluecharacterloc(i) ]=max(meanvaluecharacter{i});
+            meanvaluecharacterlocrate(i)=meanvaluecharacterloc(i)/length(curvecliffchar{i});
+        end        
+    else 
+        for i=1:characternum            
+            %curvecliffchar{i}=curvecliffsum(minEframelocation(i):minEframelocation(i+1)); %单帧音频间临近声强差度和
+             originplace=originloc(start_point(i)+2:end_point(i)+2);   %每一个字的时序位置序列
+             curvecliffchar{i}=curvecliffsum(originplace); %单帧音频间临近声强差度和
+            XruleperC=1:length(curvecliffchar{i});
+            if length(curvecliffchar{i})>=3
+                [b ,~]=polyfit(XruleperC,curvecliffchar{i},2); %拟合单帧音频间临近声强差度和变化趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvecliffchartrend(i)=b(2);
+                curvecliffcharforce(i)=b(1);
+            else
+                curvecliffchartrend(i)=1;            
+                curvecliffcharforce(i)=1;
+            end
+            mcurvecliffcharacter(i)=mean(curvecliffchar{i});%单字帧间音频临近声强差度和均值        
+            scurvecliffcharacter(i)=std(curvecliffchar{i});%单字帧间音频临近声强差度和标准差
+            %curvecliffchar        
+            [curvecliffcharvalue(i),curvecliffcharloc(i) ]=max(curvecliffchar{i});
+            mcurvecliffcharlocrate(i)=(curvecliffcharloc(i)/length(curvecliffchar{i}));
+
+            %curveintensitychar{i}=curveintensitysum(minEframelocation(i):minEframelocation(i+1)); %单字每帧频率曲线二次求导
+            curveintensitychar{i}=curveintensitysum(originplace); %单字每帧频率曲线二次求导
+            if length(curveintensitychar{i})>=3
+                [b ,~]=polyfit(XruleperC,curveintensitychar{i},2) ; %拟合单帧频率能量的变化强度曲率趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvetensitychartrend(i)=b(2) ;
+                curvetensitycharforce(i)=b(1) ;   
+            else
+                curvetensitychartrend(i)=1;            
+                curvetensitycharforce(i)=1;
+            end
+            mcurveintensitychar(i)=mean(curveintensitychar{i});%单字帧间音频曲率和均值        
+            scurveintensitychar(i)=std(curveintensitychar{i});%单字帧间音频曲率和标准差
+            [curveintensitycharvalue(i),curveintensitycharloc(i) ]=max(curveintensitychar{i});%单字帧间音频曲率和最大值与最大位
+            curveintensitycharlocrate(i)=(curveintensitycharloc(i)/length(curvecliffchar{i}));
+
+            %heightdischar{i}=heightdis(minEframelocation(i):minEframelocation(i+1));%每帧能量高度差
+            heightdischar{i}=heightdis(originplace);%每帧能量高度差
+            if length(heightdischar{i})>=3
+                [b ,~]=polyfit(XruleperC,heightdischar{i},2) ; %拟合单帧频率能量的变化强度曲率趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                heightdischar_trending(i)=b(2) ;
+                heightdischar_force(i)=b(1) ;   
+            else
+                heightdischar_trending(i)=1;            
+                heightdischar_force(i)=1;
+            end
+            mheightdischaracter(i)=mean(heightdischar{i});%单字帧间高度差均值        
+            sheightdischaracter(i)=std(heightdischar{i});%单字帧间高度差标准差
+
+            %curvecliffratechar{i}=curvecliffrate(minEframelocation(i):minEframelocation(i+1)); %陡峭率(真实）
+            curvecliffratechar{i}=curvecliffrate(originplace);%陡峭率(真实）
+            if length(curvecliffratechar{i})>=3
+                [b ,~]=polyfit(XruleperC,curvecliffratechar{i},2) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curvecliffratechar_trend(i)=b(2) ;
+                curvecliffratechar_force(i)=b(1) ;    
+            else
+                curvecliffratechar_trend(i)=1;            
+                curvecliffratechar_force(i)=1;
+            end
+            mcurvecliffratechar(i)=mean(curvecliffratechar{i});%单字陡峭率均值
+            scurvecliffratechar(i)=std(curvecliffratechar{i});%单字陡峭率标准差
+            [curvecliffratecharvalue(i),curvecliffratecharloc(i) ]=max(curvecliffratechar{i});
+            curvecliffratecharlocrate(i)=curvecliffratecharloc(i)/length(curvecliffchar{i});
+
+            %curveintensityratechar{i}=curveintensityrate(minEframelocation(i):minEframelocation(i+1));  %曲率(真实）
+            curveintensityratechar{i}=curveintensityrate(originplace);%曲率(真实）
+            if length(curveintensityratechar{i})>=3
+                [b ,~]=polyfit(XruleperC,curveintensityratechar{i},1) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                curveintenseratechar_trend(i)=b(2) ;                        
+                curveintenseratechar_force(i)=b(1) ;
+            else
+                curveintenseratechar_trend(i)=1;            
+                curveintenseratechar_force(i)=1;
+            end
+            mcurveintensityratechar(i)=mean(curveintensityratechar{i});%单字曲率均值集合
+            scurveintensityratechar(i)=std(curveintensityratechar{i});%单字曲率标准差集合
+            [curveintensityratecharvalue(i),curveintensityratecharloc(i) ]=max(curveintensityratechar{i});
+            curveintenseratecharlocrate(i)=curveintensityratecharloc(i)/length(curvecliffchar{i});
+
+            meanvalue=allvalue/size(FBEsvoice,1);
+            %meanvaluecharacter{i}=meanvalue(minEframelocation(i):minEframelocation(i+1));
+            meanvaluecharacter{i}=meanvalue(originplace);
+            if length(meanvaluecharacter{i})>=3
+                [b ,~]=polyfit(XruleperC,meanvaluecharacter{i},1) ; %拟合单帧频率能量的变化差度趋势，线性，b1为斜率，斜率下降表明音能衰减；
+                meanvaluecharacter_trend(i)=b(2) ;
+                meanvaluecharacter_force(i)=b(1) ; 
+            else
+                meanvaluecharacter_trend(i)=1;            
+                meanvaluecharacter_force(i)=1;
+            end
+            mmeanvaluecharacter(i)=mean(meanvaluecharacter{i});%单字语音听觉响度均值
+            smeanvaluecharacter(i)=std(meanvaluecharacter{i});%单字语音听觉响度标准差
+            [meanvaluecharactervalue(i),meanvaluecharacterloc(i) ]=max(meanvaluecharacter{i});
+            meanvaluecharacterlocrate(i)=meanvaluecharacterloc(i)/length(curvecliffchar{i});
+        end
+        
+        
+    end
+    %}
+        %mcurvecliffcharacter
+    audio.mmcurvecliffcharacter=mean(mcurvecliffcharacter);%字间每字帧音差和均值均值
+        audio.smcurvecliffcharacter=std(mcurvecliffcharacter);%字间每字帧音差和均值标准差
+        audio.mscurvecliffcharacter=mean(scurvecliffcharacter);%字间每字帧音差和标准差均值
+        audio.sscurvecliffcharacter=std(scurvecliffcharacter);%字间每字帧音差和标准差标准差
+        audio.mcurvecliffcharvalue=mean(curvecliffcharvalue);%字间帧音差和最大值均值
+        audio.scurvecliffcharvalue=std(curvecliffcharvalue);%字间帧音差和最大值标准差
+        audio.mcurvecliffcharloc=mean(curvecliffcharloc);%字间帧音差和最大值平均帧数
+        audio.scurvecliffcharloc=std(curvecliffcharloc);%字间帧音差和最大值帧数标准差
+        audio.mcurvecliffcharlocrate=mean(mcurvecliffcharlocrate);%字间帧音差和最大值帧位均值
+        audio.scurvecliffcharlocrate=std(mcurvecliffcharlocrate);%字间帧音差和最大值帧位标准差        
+
+        audio.mcurvecliffchartrend=mean(curvecliffchartrend);%字间单字帧音差和线性趋势均值
+        audio.scurvecliffchartrend=std(curvecliffchartrend);%字间单字帧音差和线性趋势标准差
+        [curveclifftrendcharvalue,curveclifftrendcharloc ]=max(curvecliffchartrend);
+        audio.maxcurveclifftrendcharvalue=curveclifftrendcharvalue;%字间单字帧音差和线性趋势最大值
+        audio.maxcurveclifftrendcharloc=curveclifftrendcharloc;%字间单字帧音差和线性趋势最大值帧数
+        audio.maxcurveclifftrendcharlocrate=curveclifftrendcharloc/characternum;%字间单字帧音差和线性趋势最大值帧位
+        [curveclifftrendcharvalue,curveclifftrendcharloc ]=min(curvecliffchartrend);
+        audio.mincurveclifftrendcharvalue=curveclifftrendcharvalue;%字间单字帧音差和线性趋势最小值
+        audio.mincurveclifftrendcharloc=curveclifftrendcharloc;%字间单字临帧音差和线性趋势最小值帧数
+        audio.mincurveclifftrendcharlocrate=curveclifftrendcharloc/characternum; %字间单字帧音差和线性趋势最小值帧位     
+
+        audio.mcurvecliffcharforce=mean(curvecliffcharforce);%字间单字临近声强差度二次趋势均值
+        audio.scurvecliffcharforce=std(curvecliffcharforce);%字间单字临近声强差度二次趋势标准差
+        [curvecliffcharforcevalue,curvecliffcharforceloc ]=max(curvecliffcharforce);
+        audio.maxcurvecliffcharforcevalue=curvecliffcharforcevalue;%字间单字临近声强差度二次趋势最大值
+        audio.maxcurvecliffcharforceloc=curvecliffcharforceloc;%字间单字临近声强差度二次趋势最大值帧数
+        audio.maxcurvecliffcharforcelocrate=curvecliffcharforceloc/characternum;%字间单字临近声强差度二次趋势最大值帧位
+        [curvecliffcharforcevalue,curvecliffcharforceloc ]=min(curvecliffcharforce);
+        audio.mincurvecliffcharforcevalue=curvecliffcharforcevalue;%字间单字临近声强差度二次趋势最小值
+        audio.mincurvecliffcharforceloc=curvecliffcharforceloc;%字间单字临近声强差度二次趋势最小值帧数
+        audio.mincurvecliffcharforcelocrate=curvecliffcharforceloc/characternum;%字间单字临近声强差度二次趋势最小值帧位
+   
+    audio.mcurveintensitycharvalue=mean(curveintensitycharvalue);%单字每帧音频曲率和最大值均值
+        audio.scurveintensitycharvalue=std(curveintensitycharvalue);%单字每帧音频曲率和最大值标准差
+        audio.mcurveintensitycharloc=mean(curveintensitycharloc);%单字每帧音频曲率和最大值帧数均值
+        audio.scurveintensitycharloc=std(curveintensitycharloc);%单字每帧音频曲率和最大值帧数标准差
+        audio.mcurveintensitycharlocrate=mean(curveintensitycharlocrate);%单字每帧音频曲率和最大值帧位均值
+        audio.scurveintensitycharlocrate=std(curveintensitycharlocrate);%单字每帧音频曲率和最大值帧位均值
+        
+        audio.mmcurveintensitychar=mean(mcurveintensitychar);%字间帧间音频曲率和均值均值
+        audio.smcurveintensitychar=std(mcurveintensitychar);%字间帧间音频曲率和均值标准差
+        audio.mscurveintensitychar=mean(scurveintensitychar);%字间帧间音频曲率和标准差均值
+        audio.sscurveintensitychar=std(scurveintensitychar);%字间帧间音频曲率和标准差标准差
+                        
+        audio.meancurveintensitychartrend=mean(curvetensitychartrend);%字间音频曲率和线性趋势均值
+        audio.stdcurveintensitychartrend=std(curvetensitychartrend);%字间音频曲率和线性趋势标准差
+        [curveintensitychartrevalue,curveintensitychartreloc ]=max(curvetensitychartrend);
+        audio.maxcurveintensitychartrevalue=curveintensitychartrevalue;%字间音频曲率和线性趋势最大值
+        audio.maxcurveintensitychartreloc=curveintensitychartreloc;%字间音频曲率和线性趋势最大值帧数
+        audio.maxcurveintensitycharlocrate=curveintensitychartreloc/characternum;%字间音频曲率和线性趋势最大值帧位
+        [curveintensitychartrevalue,curveintensitychartreloc ]=min(curvetensitychartrend);
+        audio.mincurveintensitychartrevalue=curveintensitychartrevalue;%字间音频曲率和线性趋势最小值
+        audio.mincurveintensitychartreloc=curveintensitychartreloc;%字间音频曲率和线性趋势最小值帧数
+        audio.mincurveintensitychartrelocrate=curveintensitychartreloc/characternum;%字间音频曲率和线性趋势最小值帧位
+        
+        audio.mcurvetensitycharforce=mean(curvetensitycharforce);%字间音频曲率和二次趋势均值
+        audio.scurvetensitycharforce=std(curvetensitycharforce);%字间音频曲率和二次趋势标准差
+        [curveintensitycharforvalue,curveintensitycharforloc ]=max(curvetensitycharforce);
+        audio.maxcurveintensitycharforvalue=curveintensitycharforvalue;%字间音频曲率和二次趋势最大值
+        audio.maxcurveintensitycharforloc=curveintensitycharforloc;%字间音频曲率和二次趋势最大值帧数
+        audio.maxcurveintensitycharforlocrate=curveintensitycharforloc/characternum;%字间音频曲率和二次趋势最大值帧位
+        [curveintensitycharforvalue,curveintensitycharforloc ]=min(curvetensitycharforce);
+        audio.mincurveintensitycharforvalue=curveintensitycharforvalue;%字间音频曲率和二次趋势最小值
+        audio.mincurveintensitycharforloc=curveintensitycharforloc;%字间音频曲率和二次趋势最小值帧数
+        audio.mincurveintensitycharforlocrate=curveintensitycharforloc/characternum;%字间音频曲率和二次趋势最小值帧位
+        
+    audio.mmheightdischaracter=mean(mheightdischaracter);%字间单字帧间高度差均值均值
+        audio.smheightdischaracter=std(mheightdischaracter);%字间单字帧间高度差均值标准差
+        audio.msheightdischaracter=mean(sheightdischaracter);%字间单字帧间高度差标准差均值
+        audio.ssheightdischaracter=std(sheightdischaracter);%字间单字帧间高度差标准差标准差
+        
+        audio.meanheightdischar_trend=mean(heightdischar_trending);%字间单字帧间高度差线性趋势均值
+        audio.stdheightdischar_trend=std(heightdischar_trending);%字间单字帧间高度差线性趋势标准差
+        [heightdischar_trendvalue,heightdischar_trendloc ]=max(heightdischar_trending);
+        audio.maxheightdischar_trendvalue=heightdischar_trendvalue;%字间单字帧间高度差线性趋势最大值
+        audio.maxheightdischar_trendloc=heightdischar_trendloc;%字间单字帧间高度差线性趋势最大值帧数
+        audio.maxheightdischar_trendlocrate=heightdischar_trendloc/characternum;%字间单字帧间高度差线性趋势最大值帧位
+        [heightdischar_trendvalue,heightdischar_trendloc ]=min(heightdischar_trending);
+        audio.minheightdischar_trendvalue=heightdischar_trendvalue;%字间单字帧间高度差线性趋势最小值
+        audio.minheightdischar_trendloc=heightdischar_trendloc;%字间单字帧间高度差线性趋势最小值帧数
+        audio.minheightdischar_trendlocrate=heightdischar_trendloc/characternum;%字间单字帧间高度差线性趋势最小值帧位
+        
+        audio.meanheightdischar_force=mean(heightdischar_force);%字间单字帧间高度差二次趋势均值
+        audio.stdheightdischar_force=std(heightdischar_force);%字间单字帧间高度差二次趋势标准差
+        [heightdischar_forcevalue,heightdischar_forceloc ]=max(heightdischar_force);
+        audio.maxheightdischar_forcevalue=heightdischar_forcevalue;%字间单字帧间高度差二次趋势最大值
+        audio.maxheightdischar_forceloc=heightdischar_forceloc;%字间单字帧间高度差二次趋势最大值帧数
+        audio.maxheightdischar_forcelocrate=heightdischar_forceloc/characternum;%字间单字帧间高度差二次趋势最大值帧位
+        [heightdischar_forcevalue,heightdischar_forceloc ]=min(heightdischar_force);
+        audio.minheightdischar_forcevalue=heightdischar_forcevalue;%字间单字帧间高度差二次趋势最小值
+        audio.minheightdischar_forceloc=heightdischar_forceloc;%字间单字帧间高度差二次趋势最小值帧数
+        audio.minheightdischar_forcelocrate=heightdischar_forceloc/characternum;%字间单字帧间高度差二次趋势最小值帧位
+   audio.mmcurvecliffratechar=mean(mcurvecliffratechar);%字间单字陡峭率均值均值
+        audio.smcurvecliffratechar=std(mcurvecliffratechar);%字间单字陡峭率均值标准差
+        audio.mscurvecliffratechar=mean(scurvecliffratechar);%字间单字陡峭率标准差均值
+        audio.sscurvecliffratechar=std(scurvecliffratechar);%字间单字陡峭率标准差标准差        
+                
+        audio.mcurvecliffratecharvalue=mean(curvecliffratecharvalue);%字间单字陡峭率最大值均值
+        audio.scurvecliffratecharvalue=std(curvecliffratecharvalue);%字间单字陡峭率最大值标准差
+        audio.mcurvecliffratecharloc=mean(curvecliffratecharloc);%字间单字陡峭率最大值帧数均值
+        audio.scurvecliffratecharloc=std(curvecliffratecharloc);%字间单字陡峭率最大值帧数标准差       
+        audio.mcurvecliffratecharacterlocrate=mean(curvecliffratecharlocrate);%字间单字陡峭率最大值帧数均值
+        audio.scurvecliffratecharacterlocrate=std(curvecliffratecharlocrate);%字间单字陡峭率最大值帧数标准差
+        
+        audio.meancurvecliffratechartrend=mean(curvecliffratechar_trend);%字间陡峭率线性差异均值
+        audio.stdcurvecliffratechartrend=std(curvecliffratechar_trend);%字间陡峭率线性差异标准差
+        [curvecliffratechartrendvalue,curvecliffratechartrendloc ]=max(curvecliffratechar_trend);
+        audio.maxcurvecliffratechartrendvalue=curvecliffratechartrendvalue;%字间单字陡峭率线性趋势最大值
+        audio.maxcurvecliffratechartrendloc=curvecliffratechartrendloc;%字间单字陡峭率线性趋势最大值帧数
+        audio.maxcurvecliffratechartrendlocrate=curvecliffratechartrendloc/characternum;%字间单字陡峭率线性趋势最大值帧位
+        [curvecliffratechartrendvalue,curvecliffratechartrendloc ]=min(curvecliffratechar_trend);
+        audio.mincurvecliffratechartrendvalue=curvecliffratechartrendvalue;%字间单字陡峭率线性趋势最小值
+        audio.mincurvecliffratechartrendloc=curvecliffratechartrendloc;%字间单字陡峭率线性趋势最小值帧数
+        audio.mincurvecliffratechartrendlocrate=curvecliffratechartrendloc/characternum; %字间单字陡峭率线性趋势最小值帧位
+        
+        audio.mcurvecliffratechar_force=mean(curvecliffratechar_force);%字间陡峭率二次差异均值
+        audio.scurvecliffratechar_force=std(curvecliffratechar_force);%字间陡峭率二次差异标准差
+        [curvecliffratechar_forcevalue,curvecliffratechar_forceloc ]=max(curvecliffratechar_force);
+        audio.maxcurvecliffratechar_forcevalue=curvecliffratechar_forcevalue;%字间单字陡峭率二次趋势最大值
+        audio.maxcurvecliffratechar_forceloc=curvecliffratechar_forceloc;%字间单字陡峭率二次趋势最大值帧数
+        audio.maxcurvecliffratechar_forcelocrate=curvecliffratechar_forceloc/characternum;%字间单字陡峭率二次趋势最大值帧位
+        [curvecliffratechar_forcevalue,curvecliffratechar_forceloc ]=min(curvecliffratechar_force);
+        audio.mincurvecliffratechar_forcevalue=curvecliffratechar_forcevalue;%字间单字陡峭率二次趋势最小值
+        audio.mincurvecliffratechar_forceloc=curvecliffratechar_forceloc;%字间单字陡峭率二次趋势最小值帧数
+        audio.mincurvecliffratechar_forcelocrate=curvecliffratechar_forceloc/characternum;  %字间单字陡峭率二次趋势最小值帧位
+     audio.mmcurveintensityratechar=mean(mcurveintensityratechar);%字间能量归一化曲率均值
+        audio.smcurveintensityratechar=std(mcurveintensityratechar);%字间能量归一化曲率标准差
+        audio.mscurveintensityratechar=mean(scurveintensityratechar);%字间能量归一化曲率标准差均值
+        audio.sscurveintensityratechar=std(scurveintensityratechar);%字间能量归一化曲率标准差标准差
+        
+        audio.mcurveintensityratecharvalue=mean(curveintensityratecharvalue);%字间每字能量归一化曲率最大值均值
+        audio.scurveintensityratecharvalue=std(curveintensityratecharvalue);%字间每字能量归一化曲率最大值标准差
+        audio.mcurveintensityratecharloc=mean(curveintensityratecharloc);%字间每字能量归一化曲率最大值帧数均值
+        audio.scurveintensityratecharloc=std(curveintensityratecharloc);%字间每字能量归一化曲率最大值帧数标准差
+        audio.mcurveintenseratecharlocrate=mean(curveintenseratecharlocrate);%字间每字能量归一化曲率最大值帧位均值
+        audio.scurveintenseratecharlocrate=std(curveintenseratecharlocrate);%字间每字能量归一化曲率最大值帧位标准差
+                
+        audio.mcurveintenseratechartrend=mean(curveintenseratechar_trend);%字间每字能量归一化曲率线性趋势均值
+        audio.scurveintenseratechartrend=std(curveintenseratechar_trend);%字间每字能量归一化曲率线性趋势标准差
+        [curveintenseratechartrendvalue,curveintenseratechartrendloc ]=max(curveintenseratechar_trend);
+        audio.maxcurveintenseratechartrendvalue=curveintenseratechartrendvalue;%字间每字能量归一化曲率线性趋势最大值
+        audio.maxcurveintenseratechartrendloc=curveintenseratechartrendloc;%字间每字能量归一化曲率线性趋势最大值帧数
+        audio.maxcurveintenseratechartrendlocrate=curveintenseratechartrendloc/characternum;%字间每字能量归一化曲率线性趋势最大值帧位
+        [curveintenseratechartrendvalue,curveintenseratechartrendloc ]=min(curveintenseratechar_trend);
+        audio.mincurveintenseratechartrendvalue=curveintenseratechartrendvalue;%字间每字能量归一化曲率线性趋势最小值
+        audio.mincurveintenseratechartrendloc=curveintenseratechartrendloc;%字间每字能量归一化曲率线性趋势最小值帧数
+        audio.mincurveintenseratechartrendlocrate=curveintenseratechartrendloc/characternum;%字间每字能量归一化曲率线性趋势最小值帧位
+        
+        audio.mcurveintenseratecharforce=mean(curveintenseratechar_force);%字间每字能量归一化曲率二次趋势均值
+        audio.scurveintenseratecharforce=std(curveintenseratechar_force); %字间每字能量归一化曲率二次趋势标准差
+        [curveintenseratecharfordvalue,curveintenseratecharforloc ]=max(curveintenseratechar_force);
+        audio.maxcurveintenseratecharfordvalue=curveintenseratecharfordvalue;%字间每字能量归一化曲率二次趋势最大值
+        audio.maxcurveintenseratecharforloc=curveintenseratecharforloc;%字间每字能量归一化曲率二次趋势最大值帧数
+        audio.maxcurveintenseratecharforlocrate=curveintenseratecharforloc/characternum;%字间每字能量归一化曲率二次趋势最大值帧位
+        [curveintenseratecharfordvalue,curveintenseratecharforloc ]=min(curveintenseratechar_force);
+        audio.mincurveintenseratecharfordvalue=curveintenseratecharfordvalue;%字间每字能量归一化曲率二次趋势最小值
+        audio.mincurveintenseratecharforloc=curveintenseratecharforloc;%字间每字能量归一化曲率二次趋势最小值帧数
+        audio.mincurveintenseratecharforlocrate=curveintenseratecharforloc/characternum;%字间每字能量归一化曲率二次趋势最小值帧位         
+    audio.mmmeanvaluecharacter=mean(mmeanvaluecharacter);%字间语音听觉响度均值
+        audio.smmeanvaluecharacter=std(mmeanvaluecharacter);%字间语音听觉响度标准差
+        audio.msmeanvaluecharacter=mean(smeanvaluecharacter);%字间语音听觉响度差异均值
+        audio.ssmeanvaluecharacter=std(smeanvaluecharacter);%字间语音听觉响度差异标准差
+                
+        audio.mmeanvaluecharactervalue=mean(meanvaluecharactervalue);%字间每字听觉响度最大值均值
+        audio.smeanvaluecharactervalue=std(meanvaluecharactervalue);%字间每字听觉响度最大值标准差
+        audio.mmeanvaluecharacterloc=mean(meanvaluecharacterloc);%字间每字听觉响度最大值帧数均值
+        audio.smeanvaluecharacterloc=std(meanvaluecharacterloc);%字间每字听觉响度最大值帧数标准差
+        audio.mmeanvaluecharacterlocrate=mean(meanvaluecharacterlocrate);%字间每字听觉响度最大值帧位均值
+        audio.smeanvaluecharacterlocrate=std(meanvaluecharacterlocrate);%字间每字听觉响度最大值帧位标准差
+        
+        audio.mmeanvaluecharacter_trend=mean(meanvaluecharacter_trend);%字间语音听觉响度线性趋势均值
+        audio.smeanvaluecharacter_trend=std(meanvaluecharacter_trend);%字间语音听觉响度线性趋势标准差
+        [meanvaluecharacter_trendvalue,meanvaluecharacter_trendloc ]=max(meanvaluecharacter_trend);
+        audio.maxmeanvaluecharacter_trendvalue=meanvaluecharacter_trendvalue;%字间语音听觉响度线性趋势最大值
+        audio.maxmeanvaluecharacter_trendloc=meanvaluecharacter_trendloc;%字间语音听觉响度线性趋势最大值帧数
+        audio.maxmeanvaluecharacter_trendlocrate=meanvaluecharacter_trendloc/characternum;%字间语音听觉响度线性趋势最大值标准差
+        [meanvaluecharacter_trendvalue,meanvaluecharacter_trendloc ]=min(meanvaluecharacter_trend);
+        audio.minmeanvaluecharacter_trendvalue=meanvaluecharacter_trendvalue;%字间语音听觉响度线性趋势最小值
+        audio.minmeanvaluecharacter_trendloc=meanvaluecharacter_trendloc;%字间语音听觉响度线性趋势最小值帧数
+        audio.minmeanvaluecharacter_trendlocrate=meanvaluecharacter_trendloc/characternum;%字间语音听觉响度线性趋势最小值帧位
+        
+        audio.mmeanvaluecharacter_force=mean(meanvaluecharacter_force);%字间语音听觉响度二次趋势均值
+        audio.smeanvaluecharacter_force=std(meanvaluecharacter_force);%字间语音听觉响度二次趋势标准差
+        [meanvaluecharacter_forcevalue,meanvaluecharacter_forceloc ]=max(meanvaluecharacter_force);
+        audio.maxmeanvaluecharacter_forcevalue=meanvaluecharacter_forcevalue;%字间语音听觉响度二次趋势最大值
+        audio.maxmeanvaluecharacter_forceloc=meanvaluecharacter_forceloc;%字间语音听觉响度二次趋势最大值帧数
+        audio.maxmeanvaluecharacter_forcelocrate=meanvaluecharacter_forceloc/characternum;%字间语音听觉响度二次趋势最大值帧位
+        [meanvaluecharacter_forcevalue,meanvaluecharacter_forceloc ]=min(meanvaluecharacter_force);
+        audio.minmeanvaluecharacter_forcevalue=meanvaluecharacter_forcevalue;%字间语音听觉响度二次趋势最小值
+        audio.minmeanvaluecharacter_forceloc=meanvaluecharacter_forceloc;%字间语音听觉响度二次趋势最小值帧数
+        audio.minmeanvaluecharacter_forcelocrate=meanvaluecharacter_forceloc/characternum;%字间语音听觉响度二次趋势最小值帧位    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%基于汉字个数，然后开始截取分析时序特征分析完毕%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    speechspeedline=diff(minEframelocation)*(Ts/1000);  %汉字单字起始终止帧
+    %speechspeedtime=(end_point-start_point)*(Ts/1000);  
+    %meanspeechspeed=mean(speechspeedtime);  %汉字单字语速时间
+    
+    
+    audio.chandougaoyin=chandougaoyin; %语音高音颤抖程度
+    audio.chandoudiyin=chandoudiyin; %语音低音颤抖程度
+    if meanCspeechtime<0.46
+        speechspeedtime=diff(minEframelocation)*(Ts/1000);  %汉字单字语速时间
+        meanspeechspeed=mean(speechspeedtime);  %汉字单字语速时间
+        audio.meanspeechspeed=meanspeechspeed;    %平均语速,单位汉字的耗时
+        audio.stdspeechspeed=std(speechspeedtime);
+    else         
+        speechspeedtime=(end_point-start_point)*(Ts/1000);        
+        audio.meanspeechspeed= (voicetimeratio*timespan)/characternum;    %平均语速,单位汉字的耗时
+        audio.stdspeechspeed=std(speechspeedtime);   %语速标准差，衡量节律差
+    end
+    %%%%每一个音节，分析语调，语气特征,音节数为变量%%%%
+    character=zeros(1,length(minEframelocation)-1);
+    (voicetimeratio*timespan)/characternum;
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%上下不统一%%%%%%%%%%%%%%%%%%%%%%
+    character_rhythmriselevel=zeros(1,length(minEframelocation)-1);
+    char_rhythm=cell(1,length(minEframelocation)-1);
+    rhythmCharmeans=zeros(1,length(minEframelocation)-1);
+    for i=1:length(minEframelocation)-1;
+        character(i)=mean(speech_FBEs_energy_frameline(minEframelocation(i):minEframelocation(i+1))); %语音音强跳跃感序列
+        char_rhythm{i}=maxFrelocation(minEframelocation(i):minEframelocation(i+1));
+        j=1:length(char_rhythm{i});
+        if length(char_rhythm{i})>=3
+            [b ,~]=polyfit(j,char_rhythm{i},1);
+            character_rhythmriselevel(i)=b(1);
+        else
+            character_rhythmriselevel(i)=1;
+        end
+        rhythmCharmeans(i)=mean(maxFrelocation(minEframelocation(i):minEframelocation(i+1))); %语音汉字音长时间序列，评价语言节奏感感
+    end
+    character_rhythmrisemean=mean(character_rhythmriselevel);
+
+    if numel(character)>=2
+        VEtailrise=(character(end)-character(end-1))/mean(speechspeedline(end-1:end));%语音结尾处的升降音量（最大音量）
+        VRtailrise=(rhythmCharmeans(end)-rhythmCharmeans(end-1))/mean(speechspeedline(end-1:end));%语音结尾处的升降音调（最大频率位置）
+        VRcharacter_rhythmrise_rate=numel(find(character_rhythmriselevel>0))/numel(character_rhythmriselevel);%升调音节比率
+    else
+        VEtailrise=[];
+        VRtailrise=[];
+        VRcharacter_rhythmrise_rate=[];
+    end
+    
+    audio.characternum=characternum;  %语音音节汉字个数
+    audio.VEtailrise=VEtailrise;%语音结尾处的音量翘起（强调、有力）
+    audio.VRtailrise=VRtailrise;%语音结尾处的音频翘起
+    audio.character_rhythmrisemean=character_rhythmrisemean;%所有语音的翘起程度，上扬个性
+    audio.VRcharacter_rhythmrise_rate=VRcharacter_rhythmrise_rate;%翘尾音符占总音符个数
+        
+    %%%%开始设计audio信息%%%%
+    v_nintevalrate=noisesumlength/(vend(1)-vstart(1));%语音间隔中间的噪音长度
+    
+    audio.v_nintevalrate=v_nintevalrate;  %噪音间隔率，噪音间隔占总语音时长比
+    audio.peak_Emeanpuremean=mean(peak_Emeanpure); %单帧所有峰值频率能量均值，衡量所有峰值频段能量的大小
+    audio.peak_Estdpuremean=mean(peak_Estdpure);%峰值频率能量波动标准差均值，衡量每帧峰值频段能量的差异性
+    audio.maxFregroup_energy_trending=maxFregroup_energy_trending;
+    
+    audio.maxFre_convergence_trending=maxFre_convergence_trending;
+    audio.peaknummean=peaknummean;
+    audio.peaknumstd=peaknumstd;
+    audio.maxFre_volumepuremean=mean(maxFre_volumepure); %最大语音能量频段能量均值
+    audio.maxFre_volumepurestd=std(maxFre_volumepure); %最大语音能量频段能量标准差
+    
+    audio.maxlocationpuremean=mean(maxlocationpure);%最大语音能量频段位置均值
+    audio.maxlocationpurestd=std(maxlocationpure);%最大语音能量频段位置标准差
+    audio.maxFre_energy_trending=maxFre_energy_trending;
+    audio.maxFre_location_trending=maxFre_location_trending;
+    audio.maxFre_energy_to_sum_ratemean=mean(maxFre_energy_to_sum_ratepure);
+    audio.maxFre_energy_to_sum_rate_trending=maxFre_energy_to_sum_rate_trending;
+    audio.mainfre_maxlengthrate=mainfre_maxlengthrate;
+    audio.mainfre_maxlengthloc=mainfre_maxlengthloc;
+    audio.nonmaxFrebandnum=nonmaxFrebandnum;
+    audio.nonmaxFrebandmean=nonmaxFrebandmean;  %非最大频率band均值
+    audio.nonmaxFrebandstd=nonmaxFrebandstd;   %非最大频率band标准差
+    audio.nonmaxFrebanddistance=nonmaxFrebanddistance; %非最大频率band区间
+    audio.secondfre_maxlengthrate=secondfre_maxlengthrate;
+    audio.secondfre_maxlengthloc=secondfre_maxlengthloc;
+    
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%中医辨证结论添加20200308%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    audio.midpower=(voicepressure_level-42.17)/11.97+1+(voiceintensity_average-0.45)/0.58+1; %中气
+   
+    
+    %%%上焦气、中焦气、下焦气比值（结论）
+    audio.lowenergyy=((lowtohighfeel-1.38)/1.89+0.5)+((lowtomidfeel-1.43)/1.04+0.5)-((max_energy_trending-0.97)/0.74+0.5)+...
+        ((E_subFre_voiceratio-1.04)/1.41+0.5);
+    audio.middleenergy=((1/lowtomidfeel-1/1.43)/0.96+0.5)+((midtohighfeel-0.97)/0.74+0.5)+((voicepressure_level-42.17)/11.97+1)+5;
+    audio.highenergy=((1/lowtohighfeel-1/1.38)/(1/1.89)+0.5)+((1/midtohighfeel-1/0.97)/(1/0.74)+0.5)+((max_energy_trending-0.97)/0.74+0.5);
+    %%%内热系数（结论）
+    audio.innerhot=FBEsmaxlinecurve+    (FBEsmaxlinetrend+0.33)/1.97+    FBEsmaxlinediffcurve+...
+    FBEsmaxlinedifftrend+    (monumentstatue-13.22)/9.92+    (max_frequency_trending-20.39)/13.11;
+    %%%%嗓音噪音幅值（结论）%%%%
+    MAG_c_dmeanV=(audio.MAG_c_dmean-12.95) /4.78;     %振幅微扰（shimmer）
+    audio.MAG_c_dstd;
+    MAG_c_dmaxV=(audio.MAG_c_dmax-56.71)/11.59;
+    audio.MAG_c_dmaxloc;
+    MAG_c_d_trendingV=(audio.MAG_c_d_trending-0.17)/0.11;    
+    MAGpeaknummeanV=(audio.MAGpeaknummean-63.88)/19.79;      %频率微扰（jitter）
+    audio.MAGpeaknumstd;
+    audio.MAGpeakmax;
+    audio.MAGpeakmaxloc;
+    audio.MAGpeaknumtrending; 
+    %语音质量（结论）
+    audio.voicepurequality=MAG_c_dmeanV+MAG_c_dmaxV+MAG_c_d_trendingV+MAGpeaknummeanV+1;  %语音质量沙哑度（结论）
+     %语音性急（结论）
+    audio.hurry=1/audio.meanspeechspeed;  %audio.hurry=1/((audio.meanspeechspeed-0.42)/0.21);
+    %语音情商（结论）       
+    p00=(audio.maxEF_frenum-9.05)/7.53;
+    p1=(audio.lastEF_fre-53.87)/56.51;
+    p2= std(audio.maxEF_rhythmheight(find(audio.maxEF_rhythmheight))-0.85)/1.18;
+    p3=(noisesectionlengthstd-4.02)/14;
+    p4=(noiseintervaltrending+1)/16  ;
+    p5=(max_frequency_trending-20)/13;
+    voiceEQ=p00+ p1+ p2+ p3+ p4+ p5; %(audio.maxEF_frenum-9.05)/7.53+    (audio.lastEF_fre-53.87)/56.51+    std(audio.maxEF_rhythmheight(audio.maxEF_rhythmheight)-0.85)/1.18+...
+    %(noisesectionlengthstd-4.02)/14    -(noiseintervaltrending(1)+1)/16    -(max_frequency_trending-20)/13;
+    audio.voiceEQ=voiceEQ(1);
+    %命令性
+    audio.order=((character_rhythmrisemean)/0.1)+((maxFre_energy_trending-0.17)/0.17)+((basefrefeel-1.15)/1.01);
+    %无奈
+    audio.helpless=((audio.mmcurveintensitychar-97)/98)-((audio.smcurveintensitychar-41)/48);
+    %心脏坚固度    
+    audio.heartstability=(audio.E_subFre1_20Hz10num(1)-0.00109)/0.003058;
+    %肝脏坚固度
+    audio.liverstability=(audio.E_subFre1_20Hz10num(2)-0.000983)/0.003028;
+    %肾脏坚固度
+    audio.kidneystability=(audio.E_subFre1_20Hz10num(3)-0.000933)/0.003024;
+    %脾脏坚固度
+    audio.spleenstability=(audio.E_subFre1_20Hz10num(4)-0.000879)/0.003448;
+    %肺脏坚固度
+    audio.lungstability=(audio.E_subFre1_20Hz10num(5)-0.000848)/0.004014;
+    %共振梯度
+    organresonance=[audio.heartstability,audio.liverstability,audio.kidneystability,audio.spleenstability,audio.lungstability];
+    p=polyfit(1:5,organresonance,1);
+    audio.organresonance=p(1);
+    audio.mu= (basefrefeel-1.15)/1+(voiceintensity_average-42.67)/11.92+(audio.MAGpeaknummean-63.87)/19.87+...
+        (audio.mmheightdischaracter-22.63)/20.78-9;
+
+    audio.huo= (brightnessfeel-0.84)/0.35+ (coughfeel-0.88)/0.39+ (audio.maxEF_frenum-9)/7.5+...
+        (audio.mmcurveintensitychar-97.92)/98+ (audio.meanspeechspeed-0.42)/0.21+ (audio.maxFre_location_trending-0.07)/0.04;
+
+    audio.tu= (audio.drumwengfeel-0.74)/0.5+ (audio.maleforcefeel-0.91)/0.5+(audio.maxbandmeanvolrate-2.93)/2.47+...
+        (audio.smcurvecliffcharacter-27.91)/30.57+(audio.smcurveintensitychar-41.42)/48.74+(audio.mainfre_maxlengthrate-27.93)/14.04+3;
+
+    audio.jin= (audio.mainvoicefeel-0.96)/0.52 +(audio.VEtailrise+0.01)/0.1 +(audio.VRtailrise+0.01)/0.13+1;
+    audio.shui= (audio.toothvoicefeel-0.96)/0.46+  (audio.transparentfeel-1.5)/0.65+  (audio.E_subFre_voiceratio-1.5)/1.92-12;
+    wuxingline=[audio.mu audio.huo audio.tu audio.jin audio.shui];
+    
+    [maxwuxing,loc]=max(wuxingline);    
+    audio.dominance=(maxwuxing-mean(wuxingline))/(std(wuxingline));%五脏情志偏性（结论）
+    audio.maxwuxing=maxwuxing;  %五行最大值
+    audio.loc=loc;  %五行位
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%中医辨证结论添加20200308完成%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %melenergy_20sec_sum
+    title_voicehead1_19={'音频时长','识别语音部分时长',...
+        '基于audio.quality_numel_minEframelocation的音频质量',...
+            '语音信号过零率均值','语音信号过零率标准差',...
+            '噪音信号过零率均值','噪音信号过零率标准差',...
+            '噪音时长比','语音时长比','beep音时长比',...
+            '噪音音强均值','语音音强均值','语音音量标准差','语音音量变化趋势','声压级','声强','声强级', ...
+            'Beep音强均值','语噪音音强比','语Beep音音强比'};
+        
+      title_voicehead3_67={'Mel分段频谱峰值数','Mel分段频谱峰最大值位','Mel分段频谱峰值跨度',...
+            'Mel分段频谱谷值数','Mel分段频谱谷最小值位','Mel分段频谱谷值跨度',...
+            '语音共振峰高度时序1','语音共振峰高度时序2','语音共振峰高度时序3','语音共振峰高度时序4','语音共振峰高度时序5',...
+            '语音共振峰强弱时序1','语音共振峰强弱时序2','语音共振峰强弱时序3','语音共振峰强弱时序4','语音共振峰强弱时序5',...
+            '共振峰最大5项频率值1','共振峰最大5项频率值2','共振峰最大5项频率值3','共振峰最大5项频率值4','共振峰最大5项频率值5',...
+            '语音共振峰高度最大值','最大共振峰与均值比','语音共振峰最大值频率',...
+            '次声段噪音音强','次声段语音音强',...
+            '噪音次声段音含量比','语音次声段音含量比','纯语音次声段音含量比',...
+            '次声1','次声2','次声3','次声4','次声5','次声6',...
+            '次声7','次声8','次声9','次声10',...
+            '次声最大值','次声最大值频率上限',...
+            '次声段噪音语音相关系数','次声段噪音语音相关显著性',...            ...           
+            '语音音调频率峰值数','最末梢语调节律幅值','最末梢语调节律频率',...
+            '语音节律频域共振峰高度1','语音节律频域共振峰高度2','语音节律频域共振峰高度3','语音节律频域共振峰高度4','语音节律频域共振峰高度5',...
+            '节律频域共振峰排名1','节律频域共振峰排名2','节律频域共振峰排名3','节律频域共振峰排名4','节律频域共振峰排名5',...
+            '节律频域共振峰频率1','节律频域共振峰频率2','节律频域共振峰频率3','节律频域共振峰频率4','节律频域共振峰频率5',...% '音律共振峰数量',                '语音节奏频率最大值','语音节奏频率最大值能量',...            '语音节奏频率最小值','语音节奏频率最小值能量',...
+            '语音节奏频率能量均值',...
+            '语音内的噪音段数','噪音段时长均值','噪音段时长标准差','噪音延时趋势','噪音间隔时长趋势'};   
+        
+    numm=1:FBEsm;    
+                %str1=repmat('mel20频谱峰和',numel(numm),1);
+                str2=num2str(reshape(numm,[],1));                
+                str3=repmat('s',numel(numm),1);
+                titles=strcat('mel',num2str(FBEsm),'频谱峰和',str2,str3);
+                %strcat(str1,str2,str3);%HR_fs_upacceleratestage1
+            melpeaksum_50=mat2cell(titles,ones(1,numel(numm)))';                       
+            str2=num2str(reshape(numm,[],1));                
+                str3=repmat('s',numel(numm),1);
+                titles=strcat('mel',num2str(FBEsm),'频率谱峰最大值',str2,str3);
+                %strcat(str1,str2,str3);%HR_fs_upacceleratestage1
+            melpeakmax_50=mat2cell(titles,ones(1,numel(numm)))';
+            str2=num2str(reshape(numm,[],1));                
+                str3=repmat('s',numel(numm),1);
+                titles=strcat('mel',num2str(FBEsm),'频率谱峰最大值',str2,str3);
+                %strcat(str1,str2,str3);%HR_fs_upacceleratestage1
+            melpeakmeam_50=mat2cell(titles,ones(1,numel(numm)))';
+            
+    title_voice1_236={title_voicehead1_19{1:end},...
+                melpeaksum_50{1:end},...
+                title_voicehead3_67{1:end},...
+                melpeakmax_50{1:end},...
+                melpeakmeam_50{1:end},...
+                };
+            quality_numel_minEframelocation
+title_voice1_236num=numel(title_voice1_236)
+     voice1_236={audio.time;audio.voicetime;...
+            audio.quality_numel_minEframelocation
+            audio.voice_cross_zero_nummean;audio.voice_cross_zero_numstd;...
+            audio.noise_cross_zero_nummean;audio.noise_cross_zero_numstd;...
+            audio.noisetimeratio;audio.voicetimeratio;audio.beeptimeratio;...
+            audio.noisevolume_average;audio.voicevolume_average;audio.voicevolume_std;audio.voicevolume_trending;...
+            audio.voicepressure_level;audio.voiceintensity_average;audio.voiceintensity_level;audio.beepvolume_average;...
+            audio.v_nvolumeratio;audio.voice_beepratio;...
+            audio.melenergy_20sec_sum;...            
+            audio.peaks_location_in_speech_fft_20melsecnum;...
+            audio.peaks_location_in_speech_fft_20melsecmaxloc;...
+            audio.peaks_location_in_speech_fft_20melsecrange;...%Mel分段频谱峰值跨度
+            audio.valley_location_in_speech_fft_20melsecnum;... %mel分段谷数        
+            audio.valley_location_in_speech_fft_20melsecminloc;...%Mel分段频谱谷值位
+            audio.valley_location_in_speech_fft_20melsecnumrange;...%
+            audio.formantheight;audio.formantrank;audio.formantloc;...
+            audio.maxformantheight;audio.maxformanttoaverage;audio.maxformantloc;...
+            audio.E_nsubFreintense1_20;audio.E_vsubFreintense1_20;...
+            audio.E_subFre_noiseratio;audio.E_subFre_voiceratio;audio.E_subFre_purevoiceratio;...
+            audio.E_subFre1_20Hz10num;...
+            audio.E_subFre1_20Hzmaxvalue;audio.E_subFre1_20Hzmaxfre;...
+            audio.E_subn_vcorrelation_para;audio.E_subn_vcorrelation_sig;...                
+            audio.maxEF_frenum;audio.lastEF_value;audio.lastEF_fre;...
+            audio.maxEF_rhythmheight;audio.maxEF_rhythmrank;audio.maxEF_rhythmfre;...audio.maxEF_rhythmnum...
+            %audio.maxEF_fre;audio.maxEF_value;...        
+            %audio.minEF_fre;audio.minEF_value;...
+            audio.maxEF_valuemean;...
+            audio.noisesectionnum;audio.noisesectionlengthmean;audio.noisesectionlengthstd;...
+            audio.noisesectiontrending;audio.noiseintervaltrending;...
+            audio.FBEs_Fre_secmax;...
+            audio.FBEs_Fre_secmean;...            
+            };
+        
+        
+        title_voice2_116={'FBEs平均语音音量',...
+                '最高能频段能量二次趋势','最高能频段能量一次趋势','最高能频段波纹二次趋势','最高能频段波纹一次趋势',...						
+                '最高能频段序号','最高频段能量比语音均能','最高能频段最大能量比平均能量',...						
+                '最高能频段第二能量比平均能量','最高能频段第三能量比平均能量','最高能频段最大峰值位置',...						
+                '最高能频段第二峰值位置','最高能频段第三峰值位置',...	                
+                '次高能频段能量二次趋势','次高能频段能量一次趋势','次高能频段波纹二次趋势','次高能频段波纹一次趋势',...						
+                '次高能频段序号','次高频段能量比语音均能','次高能频段最大能量比平均能量',...						
+                '次高能频段第二能量比平均能量','次高能频段第三能量比平均能量','次高能频段最大峰值位置',...						
+                '次高能频段第二峰值位置','次高能频段第三峰值位置',...						
+                '第三能频段能量二次趋势','第三能频段能量一次趋势','第三能频段波纹二次趋势','第三能频段波纹一次趋势',...						
+                '第三能频段序号','第三频段能量比语音均能','第三能频段最大能量比平均能量',...						
+                '第三能频段第二能量比平均能量','第三能频段第三能量比平均能量','第三能频段最大峰值位置',...						
+                '第三能频段第二峰值位置','第三能频段第三峰值位置',...	
+                '最高第二频带距离','最高第二频带位置','最高第二频带比值',...
+                '最高第三频带距离','最高第三频带位置','最高第三频带比值',...
+                '第二第三频带距离','第二第三频带位置','第二第三频带比值',...
+                '地鼓音感','男性语音力度感',...						
+                '语音主音区感','前凸轮廓感','明亮通透感',...						
+                '咳音或清亮感','高频齿音','穿透力透明感',...						
+                '低高音比（1-7）/（8-20）','低中音比（1-7）/（8-11）','中高音比（8-11）/（12-20）',...	
+                '地鼓音能','男性语音力度能',...						
+                '语音主音区能','前凸轮廓能','明亮通透能',...						
+                '咳音或清亮能','高频齿音能','穿透力透明性能',...						
+                '低高音能比（1-7）/（8-20）','低中音能比（1-7）/（8-11）','中高音能比（8-11）/（12-20）',...
+                  '音质','音质率','音阶','音阶率','音调','音调率',...
+                   '最像音质','最像音阶','最像音调','音类似度均值','音类似度标准差','最高类似差值','比较点数',...
+                'MAG一级极值数量均值','MAG一级极值数量标准差','MAG一级极值(波纹）数量最大值','MAG一级极值(波纹）数量最大位',...
+                'MAG一级极值(波纹）数量趋势','MAG每帧峰值频率均值',...						
+                'MAG每帧峰值频率标准差','MAG每帧峰值幅值均值','MAG每帧峰值幅值标准差',...						
+                '纯低音区无高值占有时序比例','纯高音区无低值占有时序比例','高低音分开分布的时序比例',...
+                '全局最高峰值点占山脊均值比重','全局最高峰值点占山脊位置比例','全局最高峰值时序动态趋势',...						
+                '全局最高峰值频率时序波纹率','全局最高峰值频率占山脊位置比例','全局最高峰值频率时序动态趋势',...						
+                '单帧波纹率均值','单帧波纹率标准差','单帧波纹率最大值',...	
+                '最大波纹率位置','波纹率的线性趋势',...						
+                '二倍频能量比最大频能均值','二倍频能量比最大频能标准差','二倍频能量比最大频能时域波动趋势',...						
+                '二倍频能量比每帧频能均值时序均值','二倍频能量比每帧频能均值时序标准差','二倍频能量比每帧频能均值的时域波动趋势',...
+                '半倍频能量比最大频能均值','半倍频能量比最大频能标准差','半倍频能量比最大频能时域波动趋势',...						
+                '半倍频能量比每帧频能均值时序均值','半倍频能量比每帧频能均值时序标准差','半倍频能量比每帧频能均值的时域波动趋势' };
+            %%%%%补2，单字与字间系列
+        
+        
+        voice2_116={audio.FBEsvoicevolume;...
+            audio.FBEsmaxlinecurve;audio.FBEsmaxlinetrend;audio.FBEsmaxlinediffcurve;audio.FBEsmaxlinedifftrend;...
+            audio.FBEsmaxfreband;audio.maxbandmeanvolrate;audio.maxbandmaxpeakvolrate;audio.maxbandsecpeakvolrate;...
+            audio.maxbandthipeakvolrate;audio.maxbandmaxpeaklocrate;audio.maxbandsecpeaklocrate;audio.maxbandthipeaklocrate;...
+            audio.FBEsseclinecurve;audio.FBEsseclinetrend;audio.FBEsseclinediffcurve;audio.FBEsseclinedifftrend;...
+            audio.FBEssecfreband;audio.secbandmeanvolrate;audio.secbandmaxpeakvolrate;audio.secbandsecpeakvolrate;...
+            audio.secbandthipeakvolrate;audio.secbandmaxpeaklocrate;audio.secbandsecpeaklocrate;audio.secbandthipeaklocrate;...
+            audio.FBEsthilinecurve;audio.FBEsthilinetrend;audio.FBEsthilinediffcurve;audio.FBEsthilinedifftrend;...
+            audio.FBEsthifreband;audio.thibandmeanvolrate;audio.thibandmaxpeakvolrate;audio.thibandsecpeakvolrate;...
+            audio.thibandthipeakvolrate;audio.thibandmaxpeaklocrate;audio.thibandsecpeaklocrate;audio.thibandthipeaklocrate;...        
+            audio.FBEsmax_secfreband_dis;audio.FBEsmax_secfreband_pos;audio.FBEsmax_secEcomp;...
+            audio.FBEsmax_thifreband_dis;audio.FBEsmax_thifreband_pos;audio.FBEsmax_thiEcomp;...
+            audio.FBEssec_thifreband_dis;audio.FBEssec_thifreband_pos;audio.FBEssec_thiEcomp;...
+            audio.drumwengfeel;audio.maleforcefeel;audio.mainvoicefeel;...
+            audio.basefrefeel;audio.brightnessfeel;audio.coughfeel;...
+            audio.toothvoicefeel;audio.transparentfeel;...
+            audio.lowtohighfeel;audio.lowtomidfeel;audio.midtohighfeel;...
+            audio.drumweng;audio.maleforce;audio.mainvoice;...
+            audio.basefre;audio.brightness;audio.cough;...
+            audio.toothvoice;audio.transparent;...
+            audio.lowtohigh;audio.lowtomid;audio.midtohigh;...
+            audio.yinzhi;audio.yinzhirate;audio.yinjie;audio.yinjierate;audio.yindiao;audio.yindiaorate;...
+            audio.yinzhisimilar;audio.yinjiesimilar;audio.yindiaosimilar;audio.wuyinchamean;audio.wuyinchastd;...
+            audio.maxsimilarwuyincha;audio.wuyinpeakpoint;...
+            audio.MAGpeaknummean;audio.MAGpeaknumstd;audio.MAGpeakmax;...
+            audio.MAGpeakmaxloc;audio.MAGpeaknumtrending;...
+            audio.MAGhighfre1mean;...
+            audio.MAGhighfre1std;audio.MAGhighvalue1mean;audio.MAGhighvalue1std;...
+            audio.MAGlowfpureper;audio.MAGhighfpureper;audio.MAGmixfpureper;...
+            audio.monumentstatue;audio.MAGhighvalue11loc;audio.max_energy_trending;...
+            audio.MAGhighfre1flux;audio.MAGhighfre11loc;audio.max_frequency_trending;...
+            audio.MAG_c_dmean;audio.MAG_c_dstd;audio.MAG_c_dmax;audio.MAG_c_dmaxloc;audio.MAG_c_d_trending;...
+            audio.MAGhighvalue1DperMmean;audio.MAGhighvalue1DperMstd;audio.Doublefre_energy_toMtrending;...                
+            audio.MAGhighvalue1Dpermmean;audio.MAGhighvalue1Dpermstd;audio.Doublefre_energy_tomtrending;...
+            audio.MAGhighvalue1HperMmean;audio.MAGhighvalue1HperMstd;audio.Halffre_energy_toMtrending;...
+            audio.MAGhighvalue1Hpermmean;audio.MAGhighvalue1Hpermstd;audio.Halffre_energy_tomtrending;...
+            };
+        
+        
+        title_voice3_150={'1字间字帧音差和均值均值','2字间字帧音差和均值标准差','3字间字帧音差和标准差均值','4字间字帧音差和标准差标准差','5字间帧音差和最大值均值',...
+                 '6字间帧音差和最大值标准差','7字间帧音差和最大值平均帧数','8字间帧音差和最大值帧数标准差','9字间帧音差和最大值帧位均值','10字间帧音差和最大值帧位标准差',...
+                 '11字间字帧音差和线性趋势均值','12字间字帧音差和线性趋势标准差','13字间字帧音差和线性趋势最大值','14字间字帧音差和线性趋势最大值帧数','15字间字帧音差和线性趋势最大值帧位',...
+                 '16字间字帧音差和线性趋势最小值','17字间字临帧音差和线性趋势最小值帧数','18字间字帧音差和线性趋势最小值帧位','19字间字帧音差和二次趋势均值','20字间字帧音差和二次趋势标准差',...
+                 '21字间字帧音差和二次趋势最大值','22字间字帧音差和二次趋势最大值帧数','23字间字帧音差和二次趋势最大值帧位','24字间字帧音差和二次趋势最小值','25字间字帧音差和二次趋势最小值帧数',...
+                 '26字间字帧音差和二次趋势最小值帧位','27字帧音曲率和最大值均值','28字帧音曲率和最大值标准差','29字帧音曲率和最大值帧数均值','30字帧音曲率和最大值帧数标准差',...%30
+                 '31字帧音曲率和最大值帧位均值','32字帧音曲率和最大值帧位均值','33字间字音曲率和均值均值','34字间字音曲率和均值标准差','35字间字音曲率和标准差均值',...
+                 '36字间字音曲率和标准差标准差','37字间字音曲率和线性趋势均值','38字间字音曲率和线性趋势标准差','39字间字音曲率和线性趋势最大值','40字间字音曲率和线性趋势最大值帧数',...
+                 '41字间字音曲率和线性趋势最大值帧位','42字间字音曲率和线性趋势最小值','43字间字音曲率和线性趋势最小值帧数','44字间字音曲率和线性趋势最小值帧位','45字间字音曲率和二次趋势均值',...
+                 '46字间字音曲率和二次趋势标准差','47字间字音曲率和二次趋势最大值','48字间字音曲率和二次趋势最大值帧数','49字间字音曲率和二次趋势最大值帧位','50字间字音曲率和二次趋势最小值',...
+                 '51字间字音曲率和二次趋势最小值帧数','52字间字音曲率和二次趋势最小值帧位','53字间字帧高度差均值均值','54字间字帧高度差均值标准差','55字间字帧高度差标准差均值',...
+                 '56字间字帧高度差标准差标准差','57字间字帧高度差线性趋势均值','58字间字帧高度差线性趋势标准差','59字间字帧高度差线性趋势最大值','60字间字帧高度差线性趋势最大值帧数',...%60
+                 '61字间字帧高度差线性趋势最大值帧位','62字间字帧高度差线性趋势最小值','63字间字帧高度差线性趋势最小值帧数','64字间字帧高度差线性趋势最小值帧位','65字间字帧高度差二次趋势均值',...
+                 '66字间字帧高度差二次趋势标准差','67字间字帧高度差二次趋势最大值','68字间字帧高度差二次趋势最大值帧数','69字间字帧高度差二次趋势最大值帧位','70字间字帧高度差二次趋势最小值',...
+                 '71字间字帧高度差二次趋势最小值帧数','72字间字帧高度差二次趋势最小值帧位','73字间字陡峭率均值均值','74字间字陡峭率均值标准差','75字间字陡峭率标准差均值',...
+                 '76字间字陡峭率标准差标准差','77字间字陡峭率最大值均值','78字间字陡峭率最大值标准差','79字间字陡峭率最大值帧数均值','80字间字陡峭率最大值帧数标准差',...
+                 '81字间字陡峭率最大值帧数均值','82字间字陡峭率最大值帧数标准差','83字间陡峭率线性差异均值','84字间陡峭率线性差异标准差','85字间字陡峭率线性趋势最大值',...
+                 '86字间字陡峭率线性趋势最大值帧数','87字间字陡峭率线性趋势最大值帧位','88字间字陡峭率线性趋势最小值','89字间字陡峭率线性趋势最小值帧数','90字间字陡峭率线性趋势最小值帧位',...%90
+                 '91字间陡峭率二次差异均值','92字间陡峭率二次差异标准差','93字间字陡峭率二次趋势最大值','94字间字陡峭率二次趋势最大值帧数','95字间字陡峭率二次趋势最大值帧位',...
+                 '96字间字陡峭率二次趋势最小值','97字间字陡峭率二次趋势最小值帧数','98字间字陡峭率二次趋势最小值帧位','99字间能量归一化曲率均值均值','100字间能量归一化曲率均值标准差',...
+                 '101字间能量归一化曲率标准差均值','102字间能量归一化曲率标准差标准差','103字间字能量归一化曲率最大值均值','104字间字能量归一化曲率最大值标准差','105字间字能量归一化曲率最大值帧数均值',...
+                 '106字间字能量归一化曲率最大值帧数标准差','107字间字能量归一化曲率最大值帧位均值','108字间字能量归一化曲率最大值帧位标准差','109字间字能量归一化曲率线性趋势均值','110字间字能量归一化曲率线性趋势标准差',...
+                 '111字间字能量归一化曲率线性趋势最大值','112字间字能量归一化曲率线性趋势最大值帧数','113字间字能量归一化曲率线性趋势最大值帧位','114字间字能量归一化曲率线性趋势最小值','115字间字能量归一化曲率线性趋势最小值帧数',...
+                 '116字间字能量归一化曲率线性趋势最小值帧位','117字间字能量归一化曲率二次趋势均值','118字间字能量归一化曲率二次趋势标准差','119字间字能量归一化曲率二次趋势最大值','120字间字能量归一化曲率二次趋势最大值帧数',...%120
+                 '121字间字能量归一化曲率二次趋势最大值帧位','122字间字能量归一化曲率二次趋势最小值','123字间字能量归一化曲率二次趋势最小值帧数','124字间字能量归一化曲率二次趋势最小值帧位','125字间语音听觉响度均值',...
+                 '126字间语音听觉响度标准差','127字间语音听觉响度差异均值','128字间语音听觉响度差异标准差','129字间每字听觉响度最大值均值','130字间每字听觉响度最大值标准差',...
+                 '131字间每字听觉响度最大值帧数均值','132字间每字听觉响度最大值帧数标准差','133字间每字听觉响度最大值帧位均值','134字间每字听觉响度最大值帧位标准差','135字间音听觉响度线性趋势均值',...
+                 '136字间音听觉响度线性趋势标准差','137字间音听觉响度线性趋势最大值','138字间音听觉响度线性趋势最大值帧数','139字间音听觉响度线性趋势最大值帧位','140字间音听觉响度线性趋势最小值',...
+                 '141字间音听觉响度线性趋势最小值帧数','142字间音听觉响度线性趋势最小值帧位','143字间音听觉响度二次趋势均值','144字间音听觉响度二次趋势标准差','145字间音听觉响度二次趋势最大值',...
+                 '146字间音听觉响度二次趋势最大值帧数','147字间音听觉响度二次趋势最大值帧位','148字间音听觉响度二次趋势最小值','149字间音听觉响度二次趋势最小值帧数','150字间音听觉响度二次趋势最小值帧位',...
+                 };                 
+              
+           title_voice4_100={'语音高音颤抖程度','语音低音颤抖程度','单位汉字的耗时','语速标准差节律差异范围',...						
+                '语音音节汉字个数','语音结尾处的音量翘起','语音结尾处的音频翘起',...
+                '平均音调上抬度',...
+                '翘尾音符占总音符个数','噪音间隔占总语音时长比',...
+                '单帧所有峰值频率能量均值','峰值频率能量差异标准差均值',...
+                '帧峰值频率能量的变化趋势',...						
+                '帧峰值频率分布范围变化趋势','单帧重音数均值','单帧重音数标准差',...
+                '最大语音能量频段能量均值','最大语音能量频段能量标准差',...
+                '最大语音能量频段位置均值','最大语音能量频段位置标准差',...
+                '帧最强能量频率的能量趋势','帧最强能量频率的频率趋势',...
+                '最强频率能量占比均值','最强频率能量占比变化趋势',...						
+                '最持续帧最大能量频率占时比','最持续帧最大能量频率区间','非最大频率band数目',...	
+                '非最大频率band均值','非最大频率band标准差','非最大频率band区间',...
+                '次持续帧最大能量频率占时比','次持续帧最大能量频率区间',...%'疾病语言'  
+                '中气力度','下焦气机强度','中焦气机强度','上焦气机强度','内热系数','语音沙哑度',...
+                '语音性急','语音情商','语气命令性','语气无奈',...
+                '心脏坚固度','肝脏坚固度','肾脏坚固度','脾脏坚固度','肺脏坚固度','脏腑语音共振梯度',...
+                '语音情志木性','语音情志火性','语音情志土性','语音情志金性','语音情志水性','情志五行最大值','情志五行位',... 
+         };
+         %单字150条列表,字间特征为主20190711
+        voice3_150={audio.mmcurvecliffcharacter;audio.smcurvecliffcharacter;audio.mscurvecliffcharacter;audio.sscurvecliffcharacter;audio.mcurvecliffcharvalue;...
+            audio.scurvecliffcharvalue;audio.mcurvecliffcharloc;audio.scurvecliffcharloc;audio.mcurvecliffcharlocrate;audio.scurvecliffcharlocrate;...
+            audio.mcurvecliffchartrend;audio.scurvecliffchartrend;audio.maxcurveclifftrendcharvalue;audio.maxcurveclifftrendcharloc;audio.maxcurveclifftrendcharlocrate;...
+            audio.mincurveclifftrendcharvalue;audio.mincurveclifftrendcharloc;audio.mincurveclifftrendcharlocrate;audio.mcurvecliffcharforce;audio.scurvecliffcharforce;...
+            audio.maxcurvecliffcharforcevalue;audio.maxcurvecliffcharforceloc;audio.maxcurvecliffcharforcelocrate;audio.mincurvecliffcharforcevalue;audio.mincurvecliffcharforceloc;...
+            audio.mincurvecliffcharforcelocrate;audio.mcurveintensitycharvalue;audio.scurveintensitycharvalue;audio.mcurveintensitycharloc;audio.scurveintensitycharloc;...%30
+            audio.mcurveintensitycharlocrate;audio.scurveintensitycharlocrate;audio.mmcurveintensitychar;audio.smcurveintensitychar;audio.mscurveintensitychar;...
+            audio.sscurveintensitychar;audio.meancurveintensitychartrend;audio.stdcurveintensitychartrend;audio.maxcurveintensitychartrevalue;audio.maxcurveintensitychartreloc;...
+            audio.maxcurveintensitycharlocrate;audio.mincurveintensitychartrevalue;audio.mincurveintensitychartreloc;audio.mincurveintensitychartrelocrate;audio.mcurvetensitycharforce;...
+            audio.scurvetensitycharforce;audio.maxcurveintensitycharforvalue;audio.maxcurveintensitycharforloc;audio.maxcurveintensitycharforlocrate;audio.mincurveintensitycharforvalue;...
+            audio.mincurveintensitycharforloc;audio.mincurveintensitycharforlocrate;audio.mmheightdischaracter;audio.smheightdischaracter;audio.msheightdischaracter;...
+            audio.ssheightdischaracter;audio.meanheightdischar_trend;audio.stdheightdischar_trend;audio.maxheightdischar_trendvalue;audio.maxheightdischar_trendloc;...%60
+            audio.maxheightdischar_trendlocrate;audio.minheightdischar_trendvalue;audio.minheightdischar_trendloc;audio.minheightdischar_trendlocrate;audio.meanheightdischar_force;...
+            audio.stdheightdischar_force;audio.maxheightdischar_forcevalue;audio.maxheightdischar_forceloc;audio.maxheightdischar_forcelocrate;audio.minheightdischar_forcevalue;...
+            audio.minheightdischar_forceloc;audio.minheightdischar_forcelocrate;audio.mmcurvecliffratechar;audio.smcurvecliffratechar;audio.mscurvecliffratechar;...
+            audio.sscurvecliffratechar;audio.mcurvecliffratecharvalue;audio.scurvecliffratecharvalue;audio.mcurvecliffratecharloc;audio.scurvecliffratecharloc;...
+            audio.mcurvecliffratecharacterlocrate;audio.scurvecliffratecharacterlocrate;audio.meancurvecliffratechartrend;audio.stdcurvecliffratechartrend;audio.maxcurvecliffratechartrendvalue;...
+            audio.maxcurvecliffratechartrendloc;audio.maxcurvecliffratechartrendlocrate;audio.mincurvecliffratechartrendvalue;audio.mincurvecliffratechartrendloc;audio.mincurvecliffratechartrendlocrate;...%90
+            audio.mcurvecliffratechar_force;audio.scurvecliffratechar_force;audio.maxcurvecliffratechar_forcevalue;audio.maxcurvecliffratechar_forceloc;audio.maxcurvecliffratechar_forcelocrate;...
+            audio.mincurvecliffratechar_forcevalue;audio.mincurvecliffratechar_forceloc;audio.mincurvecliffratechar_forcelocrate;audio.mmcurveintensityratechar;audio.smcurveintensityratechar;...
+            audio.mscurveintensityratechar;audio.sscurveintensityratechar;audio.mcurveintensityratecharvalue;audio.scurveintensityratecharvalue;audio.mcurveintensityratecharloc;...
+            audio.scurveintensityratecharloc;audio.mcurveintenseratecharlocrate;audio.scurveintenseratecharlocrate;audio.mcurveintenseratechartrend;audio.scurveintenseratechartrend;...
+            audio.maxcurveintenseratechartrendvalue;audio.maxcurveintenseratechartrendloc;audio.maxcurveintenseratechartrendlocrate;audio.mincurveintenseratechartrendvalue;audio.mincurveintenseratechartrendloc;...
+            audio.mincurveintenseratechartrendlocrate;audio.mcurveintenseratecharforce;audio.scurveintenseratecharforce;audio.maxcurveintenseratecharfordvalue;audio.maxcurveintenseratecharforloc;...%120
+            audio.maxcurveintenseratecharforlocrate;audio.mincurveintenseratecharfordvalue;audio.mincurveintenseratecharforloc;audio.mincurveintenseratecharforlocrate;audio.mmmeanvaluecharacter;...
+            audio.smmeanvaluecharacter;audio.msmeanvaluecharacter;audio.ssmeanvaluecharacter;audio.mmeanvaluecharactervalue;audio.smeanvaluecharactervalue;...
+            audio.mmeanvaluecharacterloc;audio.smeanvaluecharacterloc;audio.mmeanvaluecharacterlocrate;audio.smeanvaluecharacterlocrate;audio.mmeanvaluecharacter_trend;...
+            audio.smeanvaluecharacter_trend;audio.maxmeanvaluecharacter_trendvalue;audio.maxmeanvaluecharacter_trendloc;audio.maxmeanvaluecharacter_trendlocrate;audio.minmeanvaluecharacter_trendvalue;...
+            audio.minmeanvaluecharacter_trendloc;audio.minmeanvaluecharacter_trendlocrate;audio.mmeanvaluecharacter_force;audio.smeanvaluecharacter_force;audio.maxmeanvaluecharacter_forcevalue;...
+            audio.maxmeanvaluecharacter_forceloc;audio.maxmeanvaluecharacter_forcelocrate;audio.minmeanvaluecharacter_forcevalue;audio.minmeanvaluecharacter_forceloc;audio.minmeanvaluecharacter_forcelocrate;...%150
+            };
+       voice4_100={audio.chandougaoyin;audio.chandoudiyin;...
+            audio.meanspeechspeed;audio.stdspeechspeed;audio.characternum;...
+            audio.VEtailrise;audio.VRtailrise;...
+            audio.character_rhythmrisemean;audio.VRcharacter_rhythmrise_rate;...
+            audio.v_nintevalrate;...
+            audio.peak_Emeanpuremean;audio.peak_Estdpuremean;...
+            audio.maxFregroup_energy_trending;audio.maxFre_convergence_trending;...
+            audio.peaknummean;audio.peaknumstd;...
+            audio.maxFre_volumepuremean;audio.maxFre_volumepurestd;
+            audio.maxlocationpuremean;audio.maxlocationpurestd;...
+            audio.maxFre_energy_trending;audio.maxFre_location_trending;...
+            audio.maxFre_energy_to_sum_ratemean;audio.maxFre_energy_to_sum_rate_trending;...
+            audio.mainfre_maxlengthrate;...
+            audio.mainfre_maxlengthloc;audio.nonmaxFrebandnum;audio.nonmaxFrebandmean;audio.nonmaxFrebandstd;
+            audio.nonmaxFrebanddistance;audio.secondfre_maxlengthrate;...
+            audio.secondfre_maxlengthloc;...
+            audio.midpower;audio.lowenergyy;audio.middleenergy;audio.highenergy;audio.innerhot;audio.voicepurequality;...
+            audio.hurry;audio.voiceEQ;audio.order;audio.helpless;...
+            audio.heartstability;audio.liverstability;audio.kidneystability;audio.spleenstability;audio.lungstability;audio.organresonance;...
+            audio.mu;audio.huo;audio.tu;audio.jin;audio.shui;audio.maxwuxing;audio.loc;...
+            };
+            
+        audio_t.title_voice1_236=title_voice1_236;    %audio_dat
+        audio_dat.voice1_236=voice1_236;
+        audio_t.title_voice2_116=title_voice2_116;    %audio_dat
+        audio_dat.voice2_116=voice2_116;
+        audio_t.title_voice3_150=title_voice3_150;    %audio_dat
+        audio_dat.voice3_150=voice3_150;
+        audio_t.title_voice4_100=title_voice4_100;    %audio_dat
+        audio_dat.voice4_100=voice4_100;
+        %{
+        numel(title_voice2_116)
+        numel(voice2_116)     %audio_dat
+        numel(title_voice3_150)
+        numel(voice3_150)     %audio_dat
+        numel(title_voice4_100)
+        numel(voice4_100)     %audio_dat
+    ssssss
+    %}
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%中医辨证结论添加20200808开始%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+     
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%%%中医辨证结论添加20200808完成%%%%
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    
